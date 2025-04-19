@@ -1,6 +1,6 @@
 import os
 import logging
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import CommandHandler, ContextTypes, filters, MessageHandler
 from kb_manager import get_knowledge, save_query_log, get_stats
 from gitbook_scraper import refresh_knowledge_base
@@ -56,12 +56,13 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = f"Found some info about '{query}':\n\n"
     
     for i, result in enumerate(results, 1):
-        response += f"{i}. {result['title']}\n{result['content']}\n"
+        response += f"{i}. *{result['title']}*\n{result['content']}\n"
         if result['url']:
             response += f"More: {result['url']}\n"
         response += "\n"
     
-    await update.message.reply_text(response)
+    # Reply to the message that triggered this command
+    await update.message.reply_text(response, parse_mode="Markdown")
 
 async def category_search(update: Update, context: ContextTypes.DEFAULT_TYPE, category):
     query = " ".join(context.args)
@@ -83,12 +84,13 @@ async def category_search(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
     response = f"Here's what I know about '{query}' in {category}:\n\n"
     
     for i, result in enumerate(results, 1):
-        response += f"{i}. {result['title']}\n{result['content']}\n"
+        response += f"{i}. *{result['title']}*\n{result['content']}\n"
         if result['url']:
             response += f"More: {result['url']}\n"
         response += "\n"
     
-    await update.message.reply_text(response)
+    # Reply to the message that triggered this command
+    await update.message.reply_text(response, parse_mode="Markdown")
 
 async def judging_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await category_search(update, context, "judging")
@@ -136,7 +138,65 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(stats)
 
+async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle when the bot is mentioned with a question"""
+    message = update.message
+    
+    # Get bot's username
+    bot_username = context.bot.username
+    
+    # Check if this is really a mention message
+    if not message.text or f"@{bot_username}" not in message.text:
+        return
+        
+    # Extract the query (everything after the mention)
+    query = message.text.split(f"@{bot_username}", 1)[1].strip()
+    
+    if not query:
+        await message.reply_text("How can I help you? Try asking me a specific question.")
+        return
+        
+    # Log the query
+    user = update.effective_user
+    save_query_log(user.id, user.username or "unknown", "mention", query)
+    
+    # Search for information
+    results = get_knowledge(query)
+    if not results:
+        await message.reply_text(
+            "I don't have information about that yet. Try a different question or use /search command."
+        )
+        return
+    
+    response = f"Here's what I found about your question:\n\n"
+    
+    for i, result in enumerate(results, 1):
+        response += f"{i}. *{result['title']}*\n{result['content']}\n"
+        if result['url']:
+            response += f"More: {result['url']}\n"
+        response += "\n"
+    
+    await message.reply_text(response, parse_mode="Markdown")
+
+async def set_commands(application):
+    """Set up the bot commands in the Telegram UI"""
+    commands = [
+        BotCommand("start", "Get started with the bot"),
+        BotCommand("help", "See available commands"),
+        BotCommand("search", "Search for any information"),
+        BotCommand("judging", "Find judging-related information"),
+        BotCommand("setup", "Get help with platform setup"),
+        BotCommand("invite", "Learn about inviting judges"),
+        BotCommand("contact", "Get human support contact info")
+    ]
+    
+    await application.bot.set_my_commands(commands)
+
 def setup_handlers(application):
+    # Set up commands in Telegram UI
+    application.post_init = set_commands
+    
+    # Register command handlers
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("search", search_cmd))
@@ -149,6 +209,12 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("refresh", refresh_cmd))
     application.add_handler(CommandHandler("stats", stats_cmd))
     
+    # Handle mentions like @bot_name how to add judges?
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Entity("mention"), 
+        handle_mention
+    ))
+    
     # Handle unknown commands
     application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
 
@@ -156,6 +222,3 @@ async def unknown_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Not sure what that command is. Try /help to see what I can do."
     )
-
-
-    
