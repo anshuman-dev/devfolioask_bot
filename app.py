@@ -8,7 +8,7 @@ from gitbook_scraper import refresh_knowledge_base
 
 load_dotenv()
 
-# Quick setup for logging
+# Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -18,17 +18,18 @@ logger = logging.getLogger(__name__)
 def setup_scheduler():
     scheduler = BackgroundScheduler()
     
-    # Add the weekly job - Sunday 2AM
+    # Weekly refresh on Sunday at 2 AM
     scheduler.add_job(refresh_knowledge_base, 'cron', day_of_week='sun', hour=2)
     
     # Start the scheduler
     scheduler.start()
-    logger.info("Scheduler started - weekly refresh set for Sunday 2AM")
+    logger.info("Scheduler started - weekly refresh set for Sunday 2 AM")
     return scheduler
 
 def main():
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
     PORT = int(os.environ.get("PORT", 8080))
+    ENV = os.environ.get("ENVIRONMENT", "production").lower()
     
     if not BOT_TOKEN:
         logger.error("No BOT_TOKEN provided in environment variables!")
@@ -43,15 +44,26 @@ def main():
     # Add command handlers
     setup_handlers(app)
     
-    # Run initial knowledge base refresh
+    # Run initial knowledge base refresh if not already populated
     refresh_knowledge_base()
     
-    # Start the bot - using webhook for production
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=os.environ.get("WEBHOOK_URL")
-    )
+    # Start the bot differently based on environment
+    if ENV == "development":
+        logger.info("Starting bot in development mode (polling)")
+        app.run_polling()
+    else:
+        # Production mode with webhook
+        webhook_url = os.environ.get("WEBHOOK_URL")
+        if not webhook_url:
+            logger.error("No WEBHOOK_URL provided for production environment!")
+            return
+            
+        logger.info(f"Starting bot in production mode (webhook: {webhook_url})")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=webhook_url
+        )
 
 if __name__ == "__main__":
     main()
