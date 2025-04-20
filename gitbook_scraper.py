@@ -120,7 +120,15 @@ async def crawl_gitbook():
     return kb
 
 def refresh_knowledge_base():
-    kb = asyncio.run(crawl_gitbook())
+    # Fix for event loop error
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    kb = loop.run_until_complete(crawl_gitbook())
     save_knowledge_base(kb)
     logger.info(f"Knowledge base refreshed with {len(kb['topics'])} topics")
     
@@ -128,7 +136,3 @@ def refresh_knowledge_base():
         "timestamp": kb["last_updated"],
         "topic_count": len(kb["topics"])
     }
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    refresh_knowledge_base()
