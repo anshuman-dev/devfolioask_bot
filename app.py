@@ -27,13 +27,10 @@ def setup_scheduler():
     return scheduler
 
 def main():
-    print("Starting the bot application...")
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
     PORT = int(os.environ.get("PORT", 8080))
     ENV = os.environ.get("ENVIRONMENT", "production").lower()
     
-    print(f"Environment: {ENV}")
-    print(f"Bot token available: {'Yes' if BOT_TOKEN else 'No'}")
     if not BOT_TOKEN:
         logger.error("No BOT_TOKEN provided in environment variables!")
         return
@@ -48,12 +45,13 @@ def main():
     setup_handlers(app)
     
     # Run initial knowledge base refresh if not already populated
-    refresh_knowledge_base()
+    try:
+        refresh_knowledge_base()
+    except Exception as e:
+        logger.error(f"Error refreshing knowledge base: {e}")
     
     # Start the bot differently based on environment
-    
     if ENV == "development":
-        print("About to start polling...")
         logger.info("Starting bot in development mode (polling)")
         # Fix for event loop error
         import asyncio
@@ -75,3 +73,6 @@ def main():
             port=PORT,
             webhook_url=webhook_url
         )
+
+if __name__ == "__main__":
+    main()

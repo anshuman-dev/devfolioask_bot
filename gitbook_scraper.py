@@ -136,3 +136,7 @@ def refresh_knowledge_base():
         "timestamp": kb["last_updated"],
         "topic_count": len(kb["topics"])
     }
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    refresh_knowledge_base()
