@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 from dotenv import load_dotenv
 from telegram.ext import Application
 from bot_logic import setup_handlers
@@ -14,11 +13,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-async def print_bot_info(app):
-    bot = app.bot
-    me = await bot.get_me()
-    print(f"Bot info - ID: {me.id}, Name: {me.first_name}, Username: {me.username}")
 
 def main():
     # Load environment variables
@@ -41,14 +35,18 @@ def main():
     # Create and configure the application
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Print bot info
-    asyncio.run(print_bot_info(app))
-    
     # Add command handlers
     setup_handlers(app)
     
     # Start the bot in polling mode for development
     logger.info("Starting bot in polling mode")
+    
+    # Use a simple callback to print bot info when the application starts
+    async def post_init(application):
+        me = await application.bot.get_me()
+        print(f"Bot info - ID: {me.id}, Name: {me.first_name}, Username: {me.username}")
+    
+    app.post_init = post_init
     app.run_polling()
 
 if __name__ == "__main__":
