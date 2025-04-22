@@ -1,6 +1,6 @@
 import os
 import logging
-import json
+import asyncio
 from dotenv import load_dotenv
 from telegram.ext import Application
 from bot_logic import setup_handlers
@@ -15,6 +15,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+async def print_bot_info(app):
+    bot = app.bot
+    me = await bot.get_me()
+    print(f"Bot info - ID: {me.id}, Name: {me.first_name}, Username: {me.username}")
+
 def main():
     # Load environment variables
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -23,6 +28,9 @@ def main():
     if not BOT_TOKEN:
         logger.error("No BOT_TOKEN provided in environment variables!")
         return
+    
+    # Print some debug info
+    print(f"Starting bot with token: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
     
     # Initialize AI engine
     logger.info("Initializing AI knowledge base...")
@@ -33,27 +41,15 @@ def main():
     # Create and configure the application
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Print bot info
+    asyncio.run(print_bot_info(app))
+    
     # Add command handlers
     setup_handlers(app)
     
-    # Start the bot differently based on environment
-    if ENV == "development":
-        logger.info("Starting bot in development mode (polling)")
-        app.run_polling()
-    else:
-        # Production mode with webhook
-        webhook_url = os.environ.get("WEBHOOK_URL")
-        PORT = int(os.environ.get("PORT", 8080))
-        if not webhook_url:
-            logger.error("No WEBHOOK_URL provided for production environment!")
-            return
-            
-        logger.info(f"Starting bot in production mode (webhook: {webhook_url})")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=webhook_url
-        )
+    # Start the bot in polling mode for development
+    logger.info("Starting bot in polling mode")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
