@@ -37,30 +37,57 @@ class OpenAIClient:
             # Prepare context string from knowledge base results
             context_str = ""
             if context:
+                # Log what we're using
+                logger.info(f"Using {len(context)} context items to generate response")
+                for i, item in enumerate(context):
+                    logger.info(f"Context {i+1}: {item['source']} (relevance: {item['relevance']})")
+                
+                # Create context string
                 context_str = "Here is relevant information from Devfolio documentation:\n\n"
                 for i, item in enumerate(context, 1):
-                    context_str += f"Source {i}: {item['source']}\n{item['content']}\n\n"
+                    content = item['content']
+                    # Clean up content for better readability
+                    content = content.replace("\n", "\n")
+                    context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
             
-            # Construct the prompt
+            # Construct a more directive prompt
             system_prompt = """
-            You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. 
-            You provide clear, concise answers about Devfolio features, workflows, and best practices.
-            Format your responses in an easy-to-read way, using bullet points for steps or lists.
-            If you don't know the answer, admit it clearly rather than making something up.
-            Base your answers on the provided context information.
+            You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. Your task is to answer questions about Devfolio based on the provided documentation.
+            
+            INSTRUCTIONS:
+            1. Answer ONLY what is asked in the question.
+            2. Provide CONCISE, DIRECT answers.
+            3. Use bullet points for steps or multiple items.
+            4. If information is clearly provided in the context, use it confidently.
+            5. If information is not in the context, simply say "The documentation doesn't specify information about [topic]."
+            6. Don't fabricate information not found in the provided context.
+            7. Keep responses under 200 words.
+            
+            Remember: You are an expert on Devfolio documentation, not a general assistant.
             """
             
-            # Create the messages for the API call
+            # Create the messages for the API call with very clear instructions
             messages = [
                 {"role": "system", "content": system_prompt},
             ]
             
             # Add context if available
             if context_str:
-                messages.append({"role": "system", "content": context_str})
-                
-            # Add the user's question
-            messages.append({"role": "user", "content": question})
+                messages.append({"role": "user", "content": "Here is the documentation information you should use to answer questions:\n\n" + context_str})
+                messages.append({"role": "assistant", "content": "I've reviewed this documentation and will use it to provide accurate answers about Devfolio."})
+            
+            # Format the question with clear instructions
+            user_prompt = f"""
+            Question: {question}
+            
+            Instructions:
+            - Answer this specific question directly based on the Devfolio documentation
+            - Be concise and to the point
+            - Don't provide general information not related to the question
+            - Use bullet points where appropriate
+            """
+            
+            messages.append({"role": "user", "content": user_prompt})
             
             logger.info("Making API call to OpenAI")
             
@@ -68,8 +95,8 @@ class OpenAIClient:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=500,
-                temperature=0.7
+                max_tokens=350,  # Cap token length for conciseness
+                temperature=0.3   # Lower temperature for more focused responses
             )
             
             # Extract and return the response content
@@ -79,4 +106,4 @@ class OpenAIClient:
                 
         except Exception as e:
             logger.error(f"Error generating OpenAI response: {e}")
-            return f"I'm sorry, I encountered an error while generating a response: {str(e)}. Please try again later."
+            return f"I'm sorry, I encountered an error while generating a response. Please try again later."
