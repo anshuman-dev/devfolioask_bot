@@ -3,6 +3,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import os
 import logging
 from dotenv import load_dotenv
+from src.knowledge import KnowledgeBase
+from src.openai_client import OpenAIClient
 
 # Load environment variables
 load_dotenv()
@@ -16,6 +18,10 @@ logger = logging.getLogger(__name__)
 # Get environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_USERNAMES = os.getenv("ALLOWED_USERNAMES", "").split(",")
+
+# Initialize knowledge base and OpenAI client
+knowledge_base = KnowledgeBase()
+openai_client = OpenAIClient()
 
 # Log configuration on startup
 logger.info(f"Starting bot with token: {TOKEN[:5]}...")
@@ -53,6 +59,30 @@ I'll do my best to provide accurate information based on Devfolio documentation.
     """
     await update.message.reply_text(help_text)
 
+async def process_question(question: str) -> str:
+    """
+    Process a question using knowledge base and OpenAI.
+    
+    Args:
+        question: The user's question
+        
+    Returns:
+        The answer to the question
+    """
+    # Query the knowledge base for relevant information
+    answer_prefix, context = knowledge_base.query(question)
+    
+    # Generate response using OpenAI
+    if context:
+        answer = await openai_client.generate_response(question, context)
+    else:
+        answer = await openai_client.generate_response(
+            question, 
+            [{"source": "No specific source", "content": "No specific information found in the knowledge base."}]
+        )
+    
+    return answer
+
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /ask command."""
     question = " ".join(context.args)
@@ -62,10 +92,12 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
         
     logger.info(f"Question via /ask command: {question[:30]}...")
-    await update.message.reply_text(
-        f"Question: {question}\n\n"
-        f"This is a placeholder response. The AI integration will be added soon."
-    )
+    
+    # Process the question
+    answer = await process_question(question)
+    
+    # Send the response
+    await update.message.reply_text(answer)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages."""
@@ -82,7 +114,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Handle direct messages to the bot
     if chat_type == "private":
         logger.debug("Processing direct message")
-        await message.reply_text(f"You asked: {text}\n\nThis is a placeholder response. The AI integration will be added soon.")
+        
+        # Process the question
+        answer = await process_question(text)
+        
+        # Send the response
+        await message.reply_text(answer)
         return
     
     # Handle group messages
@@ -98,10 +135,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             if question:
                 logger.info(f"Question extracted: {question[:30]}...")
-                await message.reply_text(
-                    f"Question: {question}\n\n"
-                    f"This is a placeholder response. The AI integration will be added soon."
-                )
+                
+                # Process the question
+                answer = await process_question(question)
+                
+                # Send the response
+                await message.reply_text(answer)
             else:
                 await message.reply_text("Please include a question after mentioning me.")
 
@@ -123,8 +162,11 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
                 
                 # Send welcome message
                 await message.reply_text(
-                    "Hello! I'm DevfolioAsk Bot. I can help answer questions about Devfolio. "
-                    "Just mention me with @devfolioask_bot followed by your question."
+                    "👋 Hello everyone! I'm DevfolioAsk Bot, your Devfolio assistant!\n\n"
+                    "I can help answer questions about Devfolio platform features, workflows, and best practices. To ask me something:\n\n"
+                    "• Mention me: @devfolioask_bot How do I create a hackathon?\n"
+                    "• Or use command: /ask How do I create a hackathon?\n\n"
+                    "I'm here to make your Devfolio experience smoother! 🚀"
                 )
                 
                 # Check authorization
