@@ -125,38 +125,53 @@ class AIEngine:
             return result
             
     def answer_query(self, query, user_id=None, username=None):
-        """Answer a user query using AI"""
-        if not self.docs:
-            return "Sorry, my knowledge base isn't loaded yet. Please try again later."
-            
-        try:
-            # Include a reasonable number of docs as context
-            context_docs = self.docs[:15]  # Use first 15 chunks to avoid token limits
-            context = "\n\n".join([doc["content"] for doc in context_docs])
-            
-            # Create prompt for the AI
-            system_prompt = """You are a helpful assistant specializing in answering questions about judging, 
-            judging setup, and judge invitations for technology events and hackathons. 
-            Use the provided context to answer the user's question. 
-            If the answer cannot be found in the context, say that you don't have that information."""
-            
-            user_prompt = f"Context:\n{context}\n\nQuestion: {query}"
-            
-            # Get completion from OpenAI
-            completion = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.0
-            )
-            
-            return completion.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error answering query: {e}")
-            return "I encountered an error while processing your question. Please try again later."
+    """Answer a user query using AI"""
+    logger.info(f"AI Engine received query: '{query}'")
+    
+    if not self.docs:
+        logger.warning("Knowledge base is empty!")
+        return "Sorry, my knowledge base isn't loaded yet. Please try again later."
+        
+    try:
+        # For debugging, let's print what's in the knowledge base
+        logger.info(f"Knowledge base has {len(self.docs)} documents")
+        
+        # Include a reasonable number of docs as context
+        context_docs = self.docs[:15]  # Use first 15 chunks to avoid token limits
+        context = "\n\n".join([doc["content"] for doc in context_docs])
+        
+        logger.info(f"Created context with {len(context)} characters")
+        
+        # Create prompt for the AI
+        system_prompt = """You are a helpful assistant specializing in answering questions about judging, 
+        judging setup, and judge invitations for technology events and hackathons. 
+        Use the provided context to answer the user's question. 
+        If the answer cannot be found in the context, say that you don't have that information."""
+        
+        user_prompt = f"Context:\n{context}\n\nQuestion: {query}"
+        
+        logger.info("Sending request to OpenAI")
+        
+        # Get completion from OpenAI
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.0
+        )
+        
+        answer = completion.choices[0].message.content
+        logger.info(f"Received answer from OpenAI: '{answer[:50]}...'")
+        
+        return answer
+        
+    except Exception as e:
+        logger.error(f"Error answering query: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return "I encountered an error while processing your question. Please try again later."
 
 # Create a singleton instance
 ai_engine = AIEngine()

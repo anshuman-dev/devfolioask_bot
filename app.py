@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from dotenv import load_dotenv
 from telegram.ext import Application
 from bot_logic import setup_handlers
