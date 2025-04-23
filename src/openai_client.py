@@ -20,13 +20,14 @@ class OpenAIClient:
         self.model = "gpt-4"  # Will be updated to gpt-4.1 when in production
         self.client = openai.OpenAI(api_key=openai.api_key)
         
-    async def generate_response(self, question: str, context: List[Dict[str, Any]] = None) -> str:
+    async def generate_response(self, question: str, context: List[Dict[str, Any]] = None, conversation_context: str = "") -> str:
         """
         Generate a response using OpenAI's API based on the question and knowledge context
         
         Args:
             question: User's question
             context: Relevant context from the knowledge base
+            conversation_context: Previous conversation context
             
         Returns:
             Generated response
@@ -50,8 +51,8 @@ class OpenAIClient:
                     content = content.replace("\n", "\n")
                     context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
             
-            # Construct a more directive prompt
-            system_prompt = """
+            # Construct a more directive prompt with conversation context included
+            system_prompt = f"""
             You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. Your task is to answer questions about Devfolio based on the provided documentation.
             
             INSTRUCTIONS:
@@ -63,10 +64,12 @@ class OpenAIClient:
             6. Don't fabricate information not found in the provided context.
             7. Keep responses under 200 words.
             
+            {conversation_context if conversation_context else ""}
+            
             Remember: You are an expert on Devfolio documentation, not a general assistant.
             """
             
-            # Create the messages for the API call with very clear instructions
+            # Create the messages for the API call with clear instructions
             messages = [
                 {"role": "system", "content": system_prompt},
             ]
@@ -91,7 +94,7 @@ class OpenAIClient:
             
             logger.info("Making API call to OpenAI")
             
-            # Make the actual API call
+            # Make the API call
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
