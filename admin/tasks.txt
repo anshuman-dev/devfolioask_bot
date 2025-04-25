@@ -1,0 +1,17 @@
+# DevfolioAsk Bot - Admin Tasks
+
+## High Priority
+- Create admin interface for managing dynamic fields (like hackathon slugs)
+- Implement a way for admins to update specific parts of responses without changing the whole knowledge base
+- Add capability to inject custom variables into bot responses
+
+## Dynamic Fields Implementation
+- For hackathon slug: Design a command like /set_hackathon_slug [value] that admins can use
+- Store hackathon-specific information in a separate configuration file
+- Allow the bot to retrieve these dynamic values when constructing responses
+- Create a system for template responses with variable substitution
+
+## Future Enhancements
+- Dashboard for viewing bot usage statistics
+- Feedback analysis tools to identify knowledge gaps
+- Batch update capability for knowledge base entries

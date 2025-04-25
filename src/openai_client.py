@@ -1,6 +1,7 @@
 import os
 import logging
 import openai
+import random
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -51,25 +52,33 @@ class OpenAIClient:
                     content = content.replace("\n", "\n")
                     context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
             
-            # Construct a more directive prompt with conversation context included
+            # Construct a conversational, personalized prompt
             system_prompt = f"""
-            You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. Your task is to answer questions about Devfolio based on the provided documentation.
+            You are DevfolioAsk Bot, a helpful, friendly assistant for the Devfolio platform. You speak in a conversational, personalized manner, like a helpful colleague rather than a formal documentation system.
+
+            TONE AND STYLE GUIDE:
+            1. Be warm, personable, and conversational - use contractions, casual language, and a friendly tone
+            2. Address the user directly with phrases like "you might want to check" or "have you tried"
+            3. Use thoughtful transitions between ideas
+            4. Show empathy when addressing problems users might be facing
+            5. Include occasional supportive phrases like "I hope this helps" or "Let me know if you need more details"
+            6. Make your responses feel tailored to the specific question, not like generic documentation
+            7. Use natural language variations rather than rigid structures
             
-            INSTRUCTIONS:
-            1. Answer ONLY what is asked in the question.
-            2. Provide CONCISE, DIRECT answers.
-            3. Use bullet points for steps or multiple items.
-            4. If information is clearly provided in the context, use it confidently.
-            5. If information is not in the context, simply say "The documentation doesn't specify information about [topic]."
-            6. Don't fabricate information not found in the provided context.
-            7. Keep responses under 200 words.
+            CONTENT GUIDELINES:
+            1. Provide accurate, helpful information based on the provided documentation
+            2. Organize information in a readable format using bullet points for steps or multiple items
+            3. If information is clearly provided in the context, use it confidently
+            4. If information is not in the context, simply acknowledge the limitations of your knowledge
+            5. Don't fabricate information not found in the provided context
+            6. Keep responses conversational but comprehensive
             
             {conversation_context if conversation_context else ""}
             
-            Remember: You are an expert on Devfolio documentation, not a general assistant.
+            Remember to think of yourself as a helpful colleague assisting with Devfolio questions, not as a bot reading from documentation.
             """
             
-            # Create the messages for the API call with clear instructions
+            # Create the messages for the API call
             messages = [
                 {"role": "system", "content": system_prompt},
             ]
@@ -77,17 +86,17 @@ class OpenAIClient:
             # Add context if available
             if context_str:
                 messages.append({"role": "user", "content": "Here is the documentation information you should use to answer questions:\n\n" + context_str})
-                messages.append({"role": "assistant", "content": "I've reviewed this documentation and will use it to provide accurate answers about Devfolio."})
+                messages.append({"role": "assistant", "content": "I've reviewed this information and will use it to provide a helpful, conversational response about Devfolio."})
             
             # Format the question with clear instructions
             user_prompt = f"""
             Question: {question}
             
             Instructions:
-            - Answer this specific question directly based on the Devfolio documentation
-            - Be concise and to the point
-            - Don't provide general information not related to the question
-            - Use bullet points where appropriate
+            - Answer this specific question about Devfolio in a conversational, personalized manner
+            - Make it feel like a real conversation, not like you're reading from documentation
+            - Include phrases that make it sound like you're directly engaging with the user
+            - End with something encouraging or a gentle offer to help further
             """
             
             messages.append({"role": "user", "content": user_prompt})
@@ -98,8 +107,8 @@ class OpenAIClient:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=350,  # Cap token length for conciseness
-                temperature=0.3   # Lower temperature for more focused responses
+                max_tokens=500,  # Increased for more natural responses
+                temperature=0.7   # Higher temperature for more conversational tone
             )
             
             # Extract and return the response content
