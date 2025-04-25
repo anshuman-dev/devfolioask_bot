@@ -26,7 +26,7 @@ class OpenAIClient:
         Generate a response using OpenAI's API based on the question and knowledge context
         
         Args:
-            question: User's question
+            question: The user's question
             context: Relevant context from the knowledge base
             conversation_context: Previous conversation context
             
@@ -47,36 +47,48 @@ class OpenAIClient:
                 # Create context string
                 context_str = "Here is relevant information from Devfolio documentation:\n\n"
                 for i, item in enumerate(context, 1):
-                    content = item['content']
-                    # Clean up content for better readability
-                    content = content.replace("\n", "\n")
+                    content = item['content'].replace("\n", "\n")
                     context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
             
-            # Construct a conversational, personalized prompt
+            # Determine if this is a key question type that needs specific handling
+            is_judging_criteria = any(term in question.lower() for term in ["judging criteria", "criteria", "update criteria", "modify criteria"])
+            is_inviting_judges = any(term in question.lower() for term in ["invite judge", "inviting judge", "add judge", "adding judge"])
+            
+            # Construct a better prompt based on the question type
             system_prompt = f"""
-            You are DevfolioAsk Bot, a helpful, friendly assistant for the Devfolio platform. You speak in a conversational, personalized manner, like a helpful colleague rather than a formal documentation system.
+            You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. Your primary goal is to provide ACCURATE information from Devfolio documentation.
 
-            TONE AND STYLE GUIDE:
-            1. Be warm, personable, and conversational - use contractions, casual language, and a friendly tone
-            2. Address the user directly with phrases like "you might want to check" or "have you tried"
-            3. Use thoughtful transitions between ideas
-            4. Show empathy when addressing problems users might be facing
-            5. Include occasional supportive phrases like "I hope this helps" or "Let me know if you need more details"
-            6. Make your responses feel tailored to the specific question, not like generic documentation
-            7. Use natural language variations rather than rigid structures
-            
-            CONTENT GUIDELINES:
-            1. Provide accurate, helpful information based on the provided documentation
-            2. Organize information in a readable format using bullet points for steps or multiple items
-            3. If information is clearly provided in the context, use it confidently
-            4. If information is not in the context, simply acknowledge the limitations of your knowledge
-            5. Don't fabricate information not found in the provided context
-            6. Keep responses conversational but comprehensive
-            
+            IMPORTANT RULES:
+            1. ONLY answer using information from the provided context/documentation 
+            2. If the context doesn't contain specific information about a topic, admit it clearly instead of making up an answer
+            3. Keep your answers factually accurate based on the documentation
+            4. Format your responses in a clear, readable way
+            5. Start with a brief friendly greeting and end with a brief helpful closing, but keep the main content factual and accurate
+
+            RESPONSE STRUCTURE:
+            - Brief friendly greeting (1 line)
+            - Direct answer to the question based ONLY on provided documentation
+            - If providing steps, number them clearly
+            - Brief helpful closing (1 line)
+
             {conversation_context if conversation_context else ""}
-            
-            Remember to think of yourself as a helpful colleague assisting with Devfolio questions, not as a bot reading from documentation.
             """
+            
+            # Add special instructions for specific question types
+            if is_judging_criteria:
+                system_prompt += """
+                SPECIAL INSTRUCTIONS FOR JUDGING CRITERIA QUESTIONS:
+                - Be sure to mention that Devfolio has 5 fixed judging criteria that CANNOT be modified within the platform
+                - List all 5 criteria: Technicality, Originality, Practicality, Aesthetics, and Wow Factor
+                - Clearly state that custom criteria require contacting @singhanshuman8 and @AniketRaj314 on Telegram
+                """
+            elif is_inviting_judges:
+                system_prompt += """
+                SPECIAL INSTRUCTIONS FOR INVITING JUDGES QUESTIONS:
+                - Provide the exact step-by-step process for inviting judges on Devfolio
+                - Mention that judges need to be added through the 'Speakers and Judges' tab
+                - Explain that judges must create a Devfolio account using the same email they were invited with
+                """
             
             # Create the messages for the API call
             messages = [
@@ -85,19 +97,11 @@ class OpenAIClient:
             
             # Add context if available
             if context_str:
-                messages.append({"role": "user", "content": "Here is the documentation information you should use to answer questions:\n\n" + context_str})
-                messages.append({"role": "assistant", "content": "I've reviewed this information and will use it to provide a helpful, conversational response about Devfolio."})
+                messages.append({"role": "user", "content": "Documentation information to use when answering questions:\n\n" + context_str})
+                messages.append({"role": "assistant", "content": "I'll use this documentation to provide accurate information about Devfolio."})
             
-            # Format the question with clear instructions
-            user_prompt = f"""
-            Question: {question}
-            
-            Instructions:
-            - Answer this specific question about Devfolio in a conversational, personalized manner
-            - Make it feel like a real conversation, not like you're reading from documentation
-            - Include phrases that make it sound like you're directly engaging with the user
-            - End with something encouraging or a gentle offer to help further
-            """
+            # Format the question
+            user_prompt = f"Question from user: {question}\n\nProvide an accurate, helpful response based ONLY on the documentation provided."
             
             messages.append({"role": "user", "content": user_prompt})
             
@@ -107,8 +111,8 @@ class OpenAIClient:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=500,  # Increased for more natural responses
-                temperature=0.7   # Higher temperature for more conversational tone
+                max_tokens=500,
+                temperature=0.5  # Lower temperature for more accurate responses
             )
             
             # Extract and return the response content

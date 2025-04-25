@@ -118,24 +118,10 @@ class KnowledgeBase:
         # Initialize context list
         context = []
         
-        # Check for judge invitation-related keywords
-        judge_invitation_keywords = ["add judges", "judge invitation", "invite judges", "judging dashboard", 
-                                    "judging link", "invite judge", "judge profile", "judges invitation"]
-                                    
-        is_judge_invitation_query = any(keyword in question.lower() for keyword in judge_invitation_keywords)
-        
         # First, look for exact keyword matches in all data sources
         # Prioritize organizer knowledge
         logger.debug("Searching organizer knowledge...")
         organizer_context = self._search_data(self.organizer_data, keywords, question)
-        
-        # Boost relevance for judge invitation queries in organizer knowledge
-        if is_judge_invitation_query:
-            for item in organizer_context:
-                if "judge" in item["source"].lower() and "invitation" in item["source"].lower():
-                    item["relevance"] += 5  # Significant boost
-                    logger.info(f"Boosted relevance for judge invitation knowledge: {item['source']}")
-        
         if organizer_context:
             context.extend(organizer_context)
             
@@ -189,7 +175,7 @@ class KnowledgeBase:
             "in", "on", "at", "by", "for", "with", "about", "do", "does", "did",
             "should", "can", "could", "would", "might", "may", "there", "these",
             "those", "this", "that", "then", "than", "such", "so", "some", "my",
-            "your", "our", "their", "able", "understand", "tell", "me", "please", "help"
+            "your", "our", "their"
         }
         
         # Filter out stop words and short words
@@ -203,9 +189,7 @@ class KnowledgeBase:
             "judging mode", "judging criteria", "online judging", "offline judging",
             "sponsor judging", "judge", "judges", "adding judges", "judging process",
             "organizer", "organizers", "hackathon", "devfolio", "evaluation",
-            "prerequisites", "scoring", "dashboard", "add judges", "invite judges",
-            "judging invitation", "judge invitation", "judging dashboard", "judging link",
-            "profile", "speakers", "judges tab", "email address", "judge profile"
+            "prerequisites", "scoring", "dashboard"
         ]
         
         for phrase in composite_keywords:
@@ -229,19 +213,6 @@ class KnowledgeBase:
         results = []
         original_question_lower = original_question.lower()
         
-        # Check for judge invitation question patterns
-        judge_invitation_patterns = [
-            r"add.+judge",
-            r"invite.+judge",
-            r"judge.+invitation",
-            r"judge.+link",
-            r"judge.+dashboard",
-            r"how.+judge",
-            r"not.+able.+invite.+judge"
-        ]
-        
-        is_judge_question = any(re.search(pattern, original_question_lower) for pattern in judge_invitation_patterns)
-        
         for filename, content in data.items():
             # Extract the actual content string based on type
             if isinstance(content, dict):
@@ -250,7 +221,6 @@ class KnowledgeBase:
                 # Also check title and keywords
                 title = content.get("title", "")
                 content_keywords = content.get("keywords", [])
-                related_topics = content.get("related_topics", [])
                 
                 # Extra boost for matching titles and keywords
                 title_keyword_boost = 0
@@ -259,12 +229,6 @@ class KnowledgeBase:
                         title_keyword_boost += 2  # Higher boost for title matches
                     if any(keyword in k.lower() for k in content_keywords):
                         title_keyword_boost += 1
-                    if any(keyword in k.lower() for k in related_topics):
-                        title_keyword_boost += 0.5
-                        
-                # Special boost for judge invitation questions matched with judge content
-                if is_judge_question and ("judge" in title.lower() or "invitation" in title.lower()):
-                    title_keyword_boost += 5
             else:
                 # Plain string content
                 content_str = str(content)
