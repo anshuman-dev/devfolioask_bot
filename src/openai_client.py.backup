@@ -36,12 +36,6 @@ class OpenAIClient:
         try:
             logger.info(f"Generating AI response for: {question[:50]}...")
             
-            # Check if this is a judge invitation question
-            is_judge_invitation = any(term in question.lower() for term in [
-                "add judge", "adding judge", "invite judge", "inviting judge", 
-                "how to add judge", "judge invitation", "judges on platform"
-            ])
-            
             # Prepare context string from knowledge base results
             context_str = ""
             if context:
@@ -56,31 +50,9 @@ class OpenAIClient:
                     content = item['content'].replace("\n", "\n")
                     context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
             
-            # Special override for judge invitation questions
-            if is_judge_invitation:
-                logger.info("Detected judge invitation question - using special instructions")
-                
-                # Use EXACT specified steps for adding judges
-                judge_instruction = """
-                IMPORTANT: For questions about adding judges to Devfolio, ALWAYS use these EXACT steps:
-                
-                1. Go to the organizer dashboard
-                2. Click on the hackathon setup button
-                3. Go to "Speakers and Judges" tab
-                4. Add their profile and email address under the required text field
-                5. Make sure you are choosing the right mode of judging - Main for Online or Offline judging and Sponsor for sponsor judging
-                6. Save
-                
-                Once their profile is added with the email address, the judging invite is sent automatically.
-                
-                DO NOT mention any steps about "setting judging permissions" or "clicking Send Invite" - these are NOT part of the process.
-                """
-                
-                # Add this to context
-                context_str += "\n\nAUTHORITATIVE SOURCE (Judge Invitation Process):\n" + judge_instruction
-            
             # Determine if this is a key question type that needs specific handling
             is_judging_criteria = any(term in question.lower() for term in ["judging criteria", "criteria", "update criteria", "modify criteria"])
+            is_inviting_judges = any(term in question.lower() for term in ["invite judge", "inviting judge", "add judge", "adding judge"])
             
             # Construct a better prompt based on the question type
             system_prompt = f"""
@@ -110,13 +82,12 @@ class OpenAIClient:
                 - List all 5 criteria: Technicality, Originality, Practicality, Aesthetics, and Wow Factor
                 - Clearly state that custom criteria require contacting @singhanshuman8 and @AniketRaj314 on Telegram
                 """
-            elif is_judge_invitation:
+            elif is_inviting_judges:
                 system_prompt += """
-                SPECIAL INSTRUCTIONS FOR JUDGE INVITATION QUESTIONS:
-                - Provide ONLY the 6 steps listed in the AUTHORITATIVE SOURCE
-                - Do NOT mention any steps about setting permissions or clicking "Send Invite" button
-                - Explain that once the profile is saved with email, the invitation is automatically sent
-                - Be clear that they just need to add the profile, email, select judging mode, and save
+                SPECIAL INSTRUCTIONS FOR INVITING JUDGES QUESTIONS:
+                - Provide the exact step-by-step process for inviting judges on Devfolio
+                - Mention that judges need to be added through the 'Speakers and Judges' tab
+                - Explain that judges must create a Devfolio account using the same email they were invited with
                 """
             
             # Create the messages for the API call
