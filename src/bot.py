@@ -257,11 +257,7 @@ I'm DevfolioAsk Bot, your Devfolio assistant!
 In a group chat:
 - Mention me with @devfolioask_bot followed by your question
 - Example: @devfolioask_bot How to add judges to the platform?
-- Or use /ask followed by your question
 
-In private chat:
-- Just send your question directly
-- Use /give_feedback to provide feedback on previous answers
 
 I'll do my best to provide accurate information based on Devfolio documentation.
     """
