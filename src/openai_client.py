@@ -173,64 +173,93 @@ class OpenAIClient:
             "steps": ["retrieve information", "generate response"]
         }
 
-async def generate_agent_response(self, response_data: Dict[str, Any]) -> str:
-    """
-    Generate a final response based on execution results and query information.
-    
-    Args:
-        response_data: Dictionary containing query, execution results, and context
-        
-    Returns:
-        Formatted response string
-    """
-    try:
-        query = response_data.get("query", {})
-        execution_results = response_data.get("execution_results", {})
-        context = response_data.get("context", {})
-        
-        # Create a prompt for generating the final response
-        response_prompt = f"""
-        Based on the user's query and the information retrieved, create a helpful response.
-        
-        USER QUERY: {query.get('cleaned_query', query.get('original_query', 'Unknown query'))}
-        
-        INTENT: {query.get('intent', {}).get('type', 'question')}
-        
-        INFORMATION RETRIEVED:
-        {json.dumps(execution_results.get('retrieved_information', {}), indent=2)}
-        
-        EXECUTION STEPS COMPLETED:
-        {json.dumps(execution_results.get('steps', []), indent=2)}
-        
-        REASONING RESULTS:
-        {json.dumps(execution_results.get('reasoning_output', {}), indent=2)}
-        
-        Your response should:
-        1. Be helpful, accurate, and directly address the user's query
-        2. Include specific details from the retrieved information
-        3. Be conversational and friendly in tone
-        4. Be concise but thorough
-        5. Include specific steps or actions the user should take, if applicable
-        6. Mention any caveats or limitations, if relevant
-        
-        RESPONSE:
+    async def generate_agent_response(self, response_data: Dict[str, Any]) -> str:
         """
+        Generate a final response based on execution results and query information.
         
-        # Make the API call
-        messages = [
-            {"role": "system", "content": "You are an AI assistant providing helpful information about the Devfolio platform."},
-            {"role": "user", "content": response_prompt}
-        ]
+        Args:
+            response_data: Dictionary containing query, execution results, and context
+            
+        Returns:
+            Formatted response string
+        """
+        try:
+            query = response_data.get("query", {})
+            execution_results = response_data.get("execution_results", {})
+            context = response_data.get("context", {})
+            
+            # Create a prompt for generating the final response
+            response_prompt = f"""
+            Based on the user's query and the information retrieved, create a helpful response.
+            
+            USER QUERY: {query.get('cleaned_query', query.get('original_query', 'Unknown query'))}
+            
+            INTENT: {query.get('intent', {}).get('type', 'question')}
+            
+            INFORMATION RETRIEVED:
+            {json.dumps(execution_results.get('retrieved_information', {}), indent=2)}
+            
+            EXECUTION STEPS COMPLETED:
+            {json.dumps(execution_results.get('steps', []), indent=2)}
+            
+            REASONING RESULTS:
+            {json.dumps(execution_results.get('reasoning_output', {}), indent=2)}
+            
+            Your response should:
+            1. Be helpful, accurate, and directly address the user's query
+            2. Include specific details from the retrieved information
+            3. Be conversational and friendly in tone
+            4. Be concise but thorough
+            5. Include specific steps or actions the user should take, if applicable
+            6. Mention any caveats or limitations, if relevant
+            
+            RESPONSE:
+            """
+            
+            # Make the API call
+            messages = [
+                {"role": "system", "content": "You are an AI assistant providing helpful information about the Devfolio platform."},
+                {"role": "user", "content": response_prompt}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=800,
+                temperature=0.7  # Slightly higher temperature for more natural responses
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Error generating agent response: {e}")
+            return f"I've analyzed your question about the Devfolio platform, but encountered an error when generating the final response. Please try asking in a different way."
+
+
+    async def simple_completion(self, prompt: str) -> str:
+        """
+        Generate a simple text completion using OpenAI.
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            max_tokens=800,
-            temperature=0.7  # Slightly higher temperature for more natural responses
-        )
-        
-        return response.choices[0].message.content.strip()
-        
-    except Exception as e:
-        logger.error(f"Error generating agent response: {e}")
-        return f"I've analyzed your question about the Devfolio platform, but encountered an error when generating the final response. Please try asking in a different way."
+        Args:
+            prompt: The prompt to complete
+            
+        Returns:
+            Generated completion text
+        """
+        try:
+            messages = [
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=800,
+                temperature=0.3
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Error in simple completion: {e}")
+            return f"Error generating completion: {str(e)}"
