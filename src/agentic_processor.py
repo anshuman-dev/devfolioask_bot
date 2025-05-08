@@ -18,19 +18,33 @@ class AgenticProcessor:
     """
     
     def __init__(self):
-        """Initialize the agentic processor with necessary components."""
-        self.knowledge_base = KnowledgeBase()
-        self.scenario_kb = ScenarioKnowledgeBase()
-        self.openai_client = OpenAIClient()
-        
-        # Initialize semantic matching components
-        self.semantic_matcher = SemanticMatcher(self.scenario_kb.scenarios)
-        self.query_processor = QueryProcessor(self.semantic_matcher)
-        
-    async def process_question(self, question: str, user_id: str = None, chat_id: str = None, 
-                         bot = None, conversation_context: Dict[str, Any] = None) -> Tuple[str, str]:
+        # In __init__ method
+def __init__(self):
+    """Initialize the agentic processor with necessary components."""
+    self.knowledge_base = KnowledgeBase()
+    self.scenario_kb = ScenarioKnowledgeBase()
+    self.openai_client = OpenAIClient()
+    
+    # Initialize semantic matching components
+    self.semantic_matcher = SemanticMatcher(self.scenario_kb.scenarios)
+    self.query_processor = QueryProcessor(self.semantic_matcher)
+    
+    # Initialize the agent
+    self.agent = DevfolioAgent(
+        knowledge_base=self.knowledge_base,
+        scenario_kb=self.scenario_kb,
+        openai_client=self.openai_client,
+        semantic_matcher=self.semantic_matcher,
+        query_processor=self.query_processor
+    )
+
+# Then replace process_question with this
+    async def process_question(self, question: str, user_id: str = None, 
+                        chat_id: str = None, 
+                        bot = None, 
+                        conversation_context: Dict[str, Any] = None) -> Tuple[str, str]:
         """
-        Process a question using semantic understanding and scenario knowledge.
+        Process a question using the agent's reasoning capabilities.
         
         Args:
             question: The user's question
@@ -47,149 +61,21 @@ class AgenticProcessor:
             if chat_id and bot:
                 await bot.send_chat_action(chat_id=chat_id, action="typing")
             
-            # Process the query through our pipeline
-            processed_query = self.query_processor.process(question, conversation_context)
-            logger.info(f"Processed query: intent={processed_query['intent']['type']}, " +
-                       f"is_followup={processed_query['is_followup']}")
+            # Process the question through the agent
+            answer, executed_plan = await self.agent.process_query(question, conversation_context)
             
-            # Handle greetings specially
-            if processed_query['intent']['type'] == "greeting":
-                logger.info(f"Detected greeting: {question}")
-                return self._get_greeting_response(), None
-            
-            # Handle follow-up questions with context
-            if processed_query['is_followup'] and processed_query['previous_scenario']:
-                scenario = processed_query['previous_scenario']
-                logger.info(f"Follow-up question detected, using previous scenario: {scenario['title']}")
-                
-                # Extract dynamic variables from question if needed
-                variables = self._extract_variables_from_question(question, scenario)
-                
-                # Generate response from scenario template with follow-up awareness
-                answer = self.scenario_kb.render_scenario_response(
-                    scenario, 
-                    variables, 
-                    question=processed_query['cleaned_query'], 
-                    is_followup=True
-                )
-                
-                interaction_id = None
-                return answer, interaction_id
-                
-            # Use semantically matched scenarios
-            if processed_query['relevant_scenarios']:
-                top_scenario, confidence = processed_query['relevant_scenarios'][0]
-                logger.info(f"Found semantic match: {top_scenario['title']} (confidence: {confidence:.2f})")
-                
-                # Step 2: If we have a good scenario match, use it directly
-                if confidence > 0.75:
-                    logger.info(f"Using high-confidence semantic match: {top_scenario['title']}")
-                    
-                    # Extract dynamic variables from question
-                    variables = self._extract_variables_from_processed_query(processed_query, top_scenario)
-                    
-                    # Generate response from scenario template
-                    answer = self.scenario_kb.render_scenario_response(
-                        top_scenario, 
-                        variables, 
-                        question=processed_query['cleaned_query']
-                    )
-                    
-                    # If we have related scenarios, mention them
-                    if len(processed_query['relevant_scenarios']) > 1:
-                        related_info = "\n\nRelated topics you might find helpful:\n"
-                        for related, _ in processed_query['relevant_scenarios'][1:3]:  # Use next 2
-                            related_info += f"- {related['title']}\n"
-                        answer += related_info
-                        
-                    interaction_id = None
-                    return answer, interaction_id
-                    
-                # Step 3: If we have moderate confidence matches, use them as context for OpenAI
-                elif confidence > 0.5:
-                    # Create rich context from semantic matches
-                    rich_context = []
-                    
-                    for scenario, score in processed_query['relevant_scenarios']:
-                        scenario_context = f"Scenario: {scenario['title']} (relevance: {score:.2f})\n\n"
-                        
-                        # Include the template and components
-                        if "answer_template" in scenario:
-                            scenario_context += f"Template: {scenario['answer_template']}\n\n"
-                            
-                        if "answer_components" in scenario:
-                            components = scenario["answer_components"]
-                            if "steps" in components and components["steps"]:
-                                scenario_context += "Steps:\n" + "\n".join([f"- {step}" for step in components["steps"]]) + "\n\n"
-                            if "notes" in components and components["notes"]:
-                                scenario_context += f"Notes: {components['notes']}\n\n"
-                            if "common_issues" in components and components["common_issues"]:
-                                scenario_context += f"Common issues: {components['common_issues']}\n\n"
-                                
-                        rich_context.append({"source": scenario['title'], "content": scenario_context})
-                    
-                    # Get additional context from traditional KB as fallback
-                    _, knowledge_context = self.knowledge_base.query(question)
-                    if knowledge_context:
-                        rich_context.extend(knowledge_context)
-                    
-                    # Format conversation context
-                    context_info = ""
-                    if conversation_context:
-                        context_info = self._format_conversation_context(conversation_context)
-                        
-                    # Add intent information to enhance the response
-                    intent_info = f"The user's query has been classified as a {processed_query['intent']['type']} intent."
-                    if processed_query['is_followup']:
-                        intent_info += " This appears to be a follow-up question to a previous query."
-                    context_info += "\n" + intent_info
-                    
-                    # Generate enhanced response using OpenAI
-                    answer = await self.openai_client.generate_response(
-                        processed_query['cleaned_query'], 
-                        rich_context, 
-                        context_info
-                    )
-                    
-                    interaction_id = None
-                    return answer, interaction_id
-            
-            # Fallback to traditional knowledge base + OpenAI
-            logger.info("No good semantic match, using traditional knowledge base")
-            
-            # Create context string from conversation context if available
-            context_info = ""
-            if conversation_context:
-                context_info = self._format_conversation_context(conversation_context)
-            
-            # Add intent information even for fallback
-            if processed_query['intent']:
-                context_info += f"\nThe user's query has been classified as a {processed_query['intent']['type']} intent."
-            
-            # Query the knowledge base for relevant information
-            _, knowledge_context = self.knowledge_base.query(processed_query['cleaned_query'])
-            
-            # Generate response using OpenAI
-            if knowledge_context:
-                answer = await self.openai_client.generate_response(
-                    processed_query['cleaned_query'], 
-                    knowledge_context, 
-                    context_info
-                )
-            else:
-                answer = await self.openai_client.generate_response(
-                    processed_query['cleaned_query'], 
-                    [{"source": "No specific source", "content": "No specific information found in the knowledge base."}],
-                    context_info
-                )
+            # For debugging, log the plan type that was executed
+            if executed_plan:
+                logger.info(f"Executed plan type: {executed_plan.get('type')}")
             
             interaction_id = None
             return answer, interaction_id
-                
+            
         except Exception as e:
             logger.error(f"Error processing question: {e}")
             return f"I'm sorry, I encountered an error while generating a response. Please try again later.", None
             
+    
     def _is_greeting(self, text: str) -> bool:
         """Check if message is a simple greeting."""
         greetings = ["hi", "hello", "hey", "hola", "namaste", "greetings", "yo", "hiya", "howdy", "hii", "hiii", "hiiii"]
