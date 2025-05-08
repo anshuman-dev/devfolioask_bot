@@ -152,35 +152,102 @@ class ScenarioKnowledgeBase:
     # In src/scenario_knowledge.py, modify render_scenario_response method:
 
     def render_scenario_response(self, scenario: Dict[str, Any], variables: Dict[str, str] = None, 
-                                question: str = None, is_followup: bool = False) -> str:
-        """
-        Render a response with more contextual awareness.
-        
-        Args:
-            scenario: The scenario to render
-            variables: Dictionary of variables to substitute
-            question: Original question for contextual customization
-            is_followup: Whether this is a follow-up question
-        """
-        if not variables:
-            variables = {}
-            
-        # Detect tone and intent from question
-        intent = "troubleshooting" if any(word in question.lower() for word in 
-                                        ["not able", "can't", "cannot", "problem", "issue", "help"]) else "information"
-        
-        # Choose appropriate response style
-        if is_followup:
-            # For follow-up, create a more concise answer focusing on new information
-            response = f"Regarding your follow-up about {scenario['title'].lower()}:\n\n"
-        elif intent == "troubleshooting":
-            # For troubleshooting questions, focus on solutions
-            response = f"If you're having trouble with {scenario['title'].lower()}, here's how to resolve it:\n\n"
-        else:
-            # For regular info questions, use the standard template
-            response = scenario["answer_template"]
+                         question: str = None, is_followup: bool = False) -> str:
+    """
+    Render a response from a scenario, substituting any variables.
     
-    # Rest of the method remains the same...
+    Args:
+        scenario: The scenario to render
+        variables: Dictionary of variables to substitute
+        question: Original question for contextual customization
+        is_followup: Whether this is a follow-up question
+        
+    Returns:
+        Formatted response string
+    """
+    if not variables:
+        variables = {}
+        
+    # Customize the response based on context
+    if question:
+        intent = "troubleshooting" if any(word in question.lower() for word in 
+                                         ["not able", "can't", "cannot", "problem", "issue", "help"]) else "information"
+    else:
+        intent = "information"
+        
+    # Choose appropriate response style
+    if is_followup:
+        # Use a different intro for follow-up questions
+        if "answer_template" in scenario:
+            response = scenario["answer_template"].split("\n\n")[0]  # Use just the first paragraph
+            
+            # Add additional context for the specific follow-up
+            if "common_issues" in scenario.get("answer_components", {}) and "problem" in intent:
+                response += f"\n\nRegarding issues with {scenario['title'].lower()}: {scenario['answer_components']['common_issues']}"
+            else:
+                # Add a more detailed explanation 
+                if "answer_components" in scenario and "steps" in scenario["answer_components"]:
+                    response += "\n\nHere are the detailed steps:\n\n"
+                else:
+                    response = f"Regarding your follow-up about {scenario['title'].lower()}:\n\n"
+        else:
+            response = f"To answer your follow-up question about {scenario['title'].lower()}:\n\n"
+    
+    elif intent == "troubleshooting":
+        # For troubleshooting, focus on the solution and common issues
+        if "answer_template" in scenario:
+            # Modify the template to emphasize troubleshooting
+            response = f"If you're having trouble with {scenario['title'].lower()}, here's how to resolve it:\n\n"
+            
+            # Add the steps immediately
+            if "answer_components" in scenario and "steps" in scenario["answer_components"]:
+                steps_text = "\n".join([f"{i+1}. {step}" for i, step in enumerate(scenario["answer_components"]["steps"])])
+                response += steps_text + "\n\n"
+                
+            # Emphasize common issues
+            if "answer_components" in scenario and "common_issues" in scenario["answer_components"]:
+                response += f"Common issues to check:\n{scenario['answer_components']['common_issues']}\n\n"
+                
+            # Add the notes
+            if "answer_components" in scenario and "notes" in scenario["answer_components"]:
+                response += scenario["answer_components"]["notes"]
+        else:
+            # Fallback if no template
+            response = f"To troubleshoot issues with {scenario['title'].lower()}:\n\n"
+    else:
+        # For regular info questions, use the standard template
+        if "answer_template" in scenario:
+            response = scenario["answer_template"]
+        else:
+            # Fallback if no template is provided
+            response = f"Information about {scenario['title']}:\n\n"
+    
+    # Perform variable substitution
+    for var_name, var_value in variables.items():
+        placeholder = "{" + var_name + "}"
+        response = response.replace(placeholder, var_value)
+        
+    # Add components if needed and not handled above
+    if "answer_components" in scenario:
+        components = scenario["answer_components"]
+        
+        # Only add steps if we haven't added them already for troubleshooting
+        if "steps" in components and components["steps"] and intent != "troubleshooting":
+            steps_text = "\n".join([f"{i+1}. {step}" for i, step in enumerate(components["steps"])])
+            response = response.replace("{steps}", steps_text)
+        
+        # Add notes if available and if this isn't a follow-up (which would make the response too long)
+        if "notes" in components and components["notes"] and not is_followup:
+            response = response.replace("{notes}", components["notes"])
+            
+        # Add common issues if available and if we haven't added them already for troubleshooting
+        if "common_issues" in components and components["common_issues"] and intent != "troubleshooting":
+            response = response.replace("{common_issues}", components["common_issues"])
+            
+    # Handle any remaining placeholders
+    response = re.sub(r'\{[^}]+\}', '', response)
+    
+    return response
     
     def _text_similarity(self, text1: str, text2: str) -> float:
         """Calculate text similarity between two strings."""
