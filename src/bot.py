@@ -12,9 +12,12 @@ from dotenv import load_dotenv
 from src.knowledge import KnowledgeBase
 from src.openai_client import OpenAIClient
 from src.feedback import FeedbackSystem
+from src.agentic_processor import AgenticProcessor
 
 # Load environment variables
 load_dotenv()
+
+agentic_processor = AgenticProcessor()
 
 # Configure logging
 logging.basicConfig(
@@ -270,7 +273,7 @@ I'll do my best to provide accurate information based on Devfolio documentation.
 
 async def process_question(question: str, user_id: str = None, chat_id: str = None, bot = None) -> tuple:
     """
-    Process a question using knowledge base and OpenAI.
+    Process a question using the agentic processor.
     
     Args:
         question: The user's question
@@ -282,55 +285,33 @@ async def process_question(question: str, user_id: str = None, chat_id: str = No
         A tuple of (answer, interaction_id)
     """
     try:
-        # Show typing indicator if chat_id and bot are provided
-        if chat_id and bot:
-            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        # Get user context if available
+        conversation_context = None
+        if user_id and user_id in user_contexts:
+            conversation_context = user_contexts[user_id]
         
-        # Handle simple greetings specially
-        if is_greeting(question) or question == "greeting":
-            logger.info(f"Detected greeting: {question}")
-            # Return a random greeting response
-            answer = get_greeting_response()
-        else:
-            # Get user context if available
-            context_info = ""
-            if user_id and user_id in user_contexts:
-                user_context = user_contexts[user_id]
-                
-                # Add judging mode preference if available
-                if user_context["judging_mode_preference"]:
-                    context_info += f"The user has previously shown interest in {user_context['judging_mode_preference']} judging. "
-                
-                # Add recent conversation history for context
-                if user_context["recent_questions"]:
-                    context_info += "Recent conversation history: "
-                    for i in range(min(3, len(user_context["recent_questions"]))):
-                        context_info += f"User: {user_context['recent_questions'][-(i+1)]} | Bot: {user_context['recent_answers'][-(i+1)]} "
-            
-            # Query the knowledge base for relevant information
-            answer_prefix, knowledge_context = knowledge_base.query(question)
-            
-            # Generate response using OpenAI with conversation context
-            if knowledge_context:
-                answer = await openai_client.generate_response(question, knowledge_context, context_info)
-            else:
-                answer = await openai_client.generate_response(
-                    question, 
-                    [{"source": "No specific source", "content": "No specific information found in the knowledge base."}],
-                    context_info
-                )
+        # Process using agentic processor
+        answer, interaction_id = await agentic_processor.process_question(
+            question, 
+            user_id=user_id, 
+            chat_id=chat_id, 
+            bot=bot, 
+            conversation_context=conversation_context
+        )
+    
+        # Store the interaction for potential feedback if user_id provided
+        if user_id:
+            if not interaction_id:
+                interaction_id = feedback_system.store_interaction(user_id, question, answer)
+            # Update conversation context
+            update_user_context(user_id, question, answer)
+        
+        return answer, interaction_id
+        
     except Exception as e:
         logger.error(f"Error processing question: {e}")
         answer = f"I'm sorry, I encountered an error while generating a response. Please try again later."
-    
-    # Store the interaction for potential feedback if user_id provided
-    interaction_id = None
-    if user_id:
-        interaction_id = feedback_system.store_interaction(user_id, question, answer)
-        # Update conversation context
-        update_user_context(user_id, question, answer)
-    
-    return answer, interaction_id
+        return answer, None
 
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /ask command."""
