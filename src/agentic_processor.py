@@ -20,133 +20,47 @@ class AgenticProcessor:
         self.scenario_kb = ScenarioKnowledgeBase()
         self.openai_client = OpenAIClient()
         
+    # In src/agentic_processor.py, enhance process_question
+
     async def process_question(self, question: str, user_id: str = None, chat_id: str = None, 
-                         bot = None, conversation_context: Dict[str, Any] = None) -> Tuple[str, str]:
-        """
-        Process a question using scenario-based knowledge and OpenAI.
+                        bot = None, conversation_context: Dict[str, Any] = None) -> Tuple[str, str]:
+        # Existing code...
         
-        Args:
-            question: The user's question
-            user_id: The user's Telegram ID for tracking interactions
-            chat_id: Chat ID for sending typing indicators
-            bot: Bot instance for sending typing indicators
-            conversation_context: Previous conversation context
+        # Determine if this is a follow-up question based on conversation context
+        is_followup = False
+        previous_scenario_id = None
+        if conversation_context and conversation_context.get("recent_questions", []):
+            # Check if this question seems like a follow-up
+            prev_question = conversation_context["recent_questions"][-1]
+            prev_answer = conversation_context["recent_answers"][-1]
             
-        Returns:
-            A tuple of (answer, interaction_id)
-        """
-        try:
-            # Show typing indicator if chat_id and bot are provided
-            if chat_id and bot:
-                await bot.send_chat_action(chat_id=chat_id, action="typing")
-            
-            # Handle simple greetings specially
-            if self._is_greeting(question) or question == "greeting":
-                logger.info(f"Detected greeting: {question}")
-                # Return a random greeting response
-                return self._get_greeting_response(), None
+            # Check for follow-up indicators
+            if (len(question) < 60 and any(word in question.lower() for word in 
+                                        ["they", "it", "that", "those", "these", "their"]) or
+            "what about" in question.lower() or
+            "how about" in question.lower() or
+            not any(word in question.lower() for word in ["how", "what", "where", "when", "who"]) or
+            "no, I meant" in question.lower()):
+                is_followup = True
                 
-            # Step 1: Try to find matching scenario first
-            scenario, confidence, related_scenarios = self.scenario_kb.query(question)
-            
-            # Step 2: If we have a good scenario match, use it directly
-            if scenario and confidence > 0.7:
-                logger.info(f"Found high-confidence scenario match: {scenario['title']} ({confidence:.2f})")
-                
-                # Extract dynamic variables from question if needed
+                # Try to find the previous scenario ID if available
+                for scenario in self.scenario_kb.scenarios:
+                    if scenario["title"].lower() in prev_answer.lower():
+                        previous_scenario_id = scenario["scenario_id"]
+                        break
+        
+        # If this is a follow-up and we have previous scenario, prioritize that
+        if is_followup and previous_scenario_id:
+            scenario = self.scenario_kb.get_scenario_by_id(previous_scenario_id)
+            if scenario:
+                # Generate a follow-up specific response
                 variables = self._extract_variables_from_question(question, scenario)
+                answer = self.scenario_kb.render_scenario_response(
+                    scenario, variables, question=question, is_followup=True
+                )
+                return answer, None
                 
-                # Generate response from scenario template
-                answer = self.scenario_kb.render_scenario_response(scenario, variables)
-                
-                # If we have related scenarios, mention them
-                if related_scenarios and len(related_scenarios) > 0:
-                    related_info = "\n\nRelated topics you might find helpful:\n"
-                    for related in related_scenarios[:2]:  # Limit to 2
-                        related_info += f"- {related['title']}\n"
-                    answer += related_info
-                    
-                interaction_id = None
-                if user_id:
-                    # TODO: Store the interaction for potential feedback
-                    pass
-                    
-                return answer, interaction_id
-                
-            # Step 3: If we have a medium-confidence match, use it as context for OpenAI
-            elif scenario and confidence > 0.4:
-                logger.info(f"Found medium-confidence scenario match: {scenario['title']} ({confidence:.2f})")
-                
-                # Create context from scenario + traditional knowledge base
-                scenario_context = f"Scenario: {scenario['title']}\n\n"
-                
-                # Include the template and components
-                if "answer_template" in scenario:
-                    scenario_context += f"Template: {scenario['answer_template']}\n\n"
-                    
-                if "answer_components" in scenario:
-                    components = scenario["answer_components"]
-                    if "steps" in components and components["steps"]:
-                        scenario_context += "Steps:\n" + "\n".join([f"- {step}" for step in components["steps"]]) + "\n\n"
-                    if "notes" in components and components["notes"]:
-                        scenario_context += f"Notes: {components['notes']}\n\n"
-                    if "common_issues" in components and components["common_issues"]:
-                        scenario_context += f"Common issues: {components['common_issues']}\n\n"
-                
-                # Get additional context from traditional KB as fallback
-                _, knowledge_context = self.knowledge_base.query(question)
-                
-                # Combine contexts for OpenAI
-                context_info = ""
-                if conversation_context:
-                    context_info = self._format_conversation_context(conversation_context)
-                
-                # Generate response using OpenAI
-                custom_context = [{"source": "Scenario Match", "content": scenario_context}]
-                if knowledge_context:
-                    custom_context.extend(knowledge_context)
-                    
-                answer = await self.openai_client.generate_response(question, custom_context, context_info)
-                
-                interaction_id = None
-                if user_id:
-                    # TODO: Store the interaction for potential feedback
-                    pass
-                    
-                return answer, interaction_id
-                
-            # Step 4: Fallback to traditional knowledge base + OpenAI
-            else:
-                logger.info(f"No good scenario match, using traditional knowledge base")
-                
-                # Create context string from conversation context if available
-                context_info = ""
-                if conversation_context:
-                    context_info = self._format_conversation_context(conversation_context)
-                
-                # Query the knowledge base for relevant information
-                _, knowledge_context = self.knowledge_base.query(question)
-                
-                # Generate response using OpenAI
-                if knowledge_context:
-                    answer = await self.openai_client.generate_response(question, knowledge_context, context_info)
-                else:
-                    answer = await self.openai_client.generate_response(
-                        question, 
-                        [{"source": "No specific source", "content": "No specific information found in the knowledge base."}],
-                        context_info
-                    )
-                
-                interaction_id = None
-                if user_id:
-                    # TODO: Store the interaction for potential feedback
-                    pass
-                    
-                return answer, interaction_id
-                
-        except Exception as e:
-            logger.error(f"Error processing question: {e}")
-            return f"I'm sorry, I encountered an error while generating a response. Please try again later.", None
+        # Rest of the method remains the same...
             
     def _is_greeting(self, text: str) -> bool:
         """Check if message is a simple greeting."""

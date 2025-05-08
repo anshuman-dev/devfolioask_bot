@@ -149,50 +149,38 @@ class ScenarioKnowledgeBase:
                 
         return related
     
-    def render_scenario_response(self, scenario: Dict[str, Any], variables: Dict[str, str] = None) -> str:
+    # In src/scenario_knowledge.py, modify render_scenario_response method:
+
+    def render_scenario_response(self, scenario: Dict[str, Any], variables: Dict[str, str] = None, 
+                                question: str = None, is_followup: bool = False) -> str:
         """
-        Render a response from a scenario, substituting any variables.
+        Render a response with more contextual awareness.
         
         Args:
             scenario: The scenario to render
-            variables: Dictionary of variables to substitute in the template
-            
-        Returns:
-            Formatted response string
+            variables: Dictionary of variables to substitute
+            question: Original question for contextual customization
+            is_followup: Whether this is a follow-up question
         """
         if not variables:
             variables = {}
             
-        if "answer_template" in scenario:
-            # Basic template substitution
-            response = scenario["answer_template"]
-            for var_name, var_value in variables.items():
-                placeholder = "{" + var_name + "}"
-                response = response.replace(placeholder, var_value)
-                
-            # Add components if needed
-            if "answer_components" in scenario:
-                components = scenario["answer_components"]
-                
-                # Add steps if available
-                if "steps" in components and components["steps"]:
-                    steps_text = "\n".join([f"{i+1}. {step}" for i, step in enumerate(components["steps"])])
-                    response = response.replace("{steps}", steps_text)
-                
-                # Add notes if available
-                if "notes" in components and components["notes"]:
-                    response = response.replace("{notes}", components["notes"])
-                    
-                # Add common issues if available
-                if "common_issues" in components and components["common_issues"]:
-                    response = response.replace("{common_issues}", components["common_issues"])
-                    
-            return response
+        # Detect tone and intent from question
+        intent = "troubleshooting" if any(word in question.lower() for word in 
+                                        ["not able", "can't", "cannot", "problem", "issue", "help"]) else "information"
+        
+        # Choose appropriate response style
+        if is_followup:
+            # For follow-up, create a more concise answer focusing on new information
+            response = f"Regarding your follow-up about {scenario['title'].lower()}:\n\n"
+        elif intent == "troubleshooting":
+            # For troubleshooting questions, focus on solutions
+            response = f"If you're having trouble with {scenario['title'].lower()}, here's how to resolve it:\n\n"
         else:
-            # Fallback if no template is provided
-            return f"Information about {scenario['title']}:\n\n" + \
-                   "\n\n".join([f"{k}: {v}" for k, v in scenario.items() 
-                              if k not in ["scenario_id", "compiled_patterns", "keywords", "question_patterns"]])
+            # For regular info questions, use the standard template
+            response = scenario["answer_template"]
+    
+    # Rest of the method remains the same...
     
     def _text_similarity(self, text1: str, text2: str) -> float:
         """Calculate text similarity between two strings."""

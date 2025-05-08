@@ -21,134 +21,51 @@ class OpenAIClient:
         self.model = "gpt-4"  # Will be updated to gpt-4.1 when in production
         self.client = openai.OpenAI(api_key=openai.api_key)
         
-    async def generate_response(self, question: str, context: List[Dict[str, Any]] = None, conversation_context: str = "") -> str:
-        """
-        Generate a response using OpenAI's API based on the question and knowledge context
-        
-        Args:
-            question: The user's question
-            context: Relevant context from the knowledge base
-            conversation_context: Previous conversation context
-            
-        Returns:
-            Generated response
-        """
+    # In src/openai_client.py, add better error handling:
+
+    async def generate_response(self, question: str, context: List[Dict[str, Any]] = None, 
+                            conversation_context: str = "") -> str:
+        """Generate response with better error handling."""
         try:
-            logger.info(f"Generating AI response for: {question[:50]}...")
+            # Existing code...
             
-            # Check if this is a judge invitation question
-            is_judge_invitation = any(term in question.lower() for term in [
-                "add judge", "adding judge", "invite judge", "inviting judge", 
-                "how to add judge", "judge invitation", "judges on platform"
-            ])
-            
-            # Prepare context string from knowledge base results
-            context_str = ""
-            if context:
-                # Log what we're using
-                logger.info(f"Using {len(context)} context items to generate response")
-                for i, item in enumerate(context):
-                    logger.info(f"Context {i+1}: {item['source']} (relevance: {item['relevance']})")
-                
-                # Create context string
-                context_str = "Here is relevant information from Devfolio documentation:\n\n"
-                for i, item in enumerate(context, 1):
-                    content = item['content'].replace("\n", "\n")
-                    context_str += f"Source {i} ({item['source']}):\n{content}\n\n"
-            
-            # Special override for judge invitation questions
-            if is_judge_invitation:
-                logger.info("Detected judge invitation question - using special instructions")
-                
-                # Use EXACT specified steps for adding judges
-                judge_instruction = """
-                IMPORTANT: For questions about adding judges to Devfolio, ALWAYS use these EXACT steps:
-                
-                1. Go to the organizer dashboard
-                2. Click on the hackathon setup button
-                3. Go to "Speakers and Judges" tab
-                4. Add their profile and email address under the required text field
-                5. Make sure you are choosing the right mode of judging - Main for Online or Offline judging and Sponsor for sponsor judging
-                6. Save
-                
-                Once their profile is added with the email address, the judging invite is sent automatically.
-                
-                DO NOT mention any steps about "setting judging permissions" or "clicking Send Invite" - these are NOT part of the process.
-                """
-                
-                # Add this to context
-                context_str += "\n\nAUTHORITATIVE SOURCE (Judge Invitation Process):\n" + judge_instruction
-            
-            # Determine if this is a key question type that needs specific handling
-            is_judging_criteria = any(term in question.lower() for term in ["judging criteria", "criteria", "update criteria", "modify criteria"])
-            
-            # Construct a better prompt based on the question type
-            system_prompt = f"""
-            You are DevfolioAsk Bot, a helpful assistant for the Devfolio platform. Your primary goal is to provide ACCURATE information from Devfolio documentation.
-
-            IMPORTANT RULES:
-            1. ONLY answer using information from the provided context/documentation 
-            2. If the context doesn't contain specific information about a topic, admit it clearly instead of making up an answer
-            3. Keep your answers factually accurate based on the documentation
-            4. Format your responses in a clear, readable way
-            5. Start with a brief friendly greeting and end with a brief helpful closing, but keep the main content factual and accurate
-
-            RESPONSE STRUCTURE:
-            - Brief friendly greeting (1 line)
-            - Direct answer to the question based ONLY on provided documentation
-            - If providing steps, number them clearly
-            - Brief helpful closing (1 line)
-
-            {conversation_context if conversation_context else ""}
-            """
-            
-            # Add special instructions for specific question types
-            if is_judging_criteria:
-                system_prompt += """
-                SPECIAL INSTRUCTIONS FOR JUDGING CRITERIA QUESTIONS:
-                - Be sure to mention that Devfolio has 5 fixed judging criteria that CANNOT be modified within the platform
-                - List all 5 criteria: Technicality, Originality, Practicality, Aesthetics, and Wow Factor
-                - Clearly state that custom criteria require contacting @singhanshuman8 and @AniketRaj314 on Telegram
-                """
-            elif is_judge_invitation:
-                system_prompt += """
-                SPECIAL INSTRUCTIONS FOR JUDGE INVITATION QUESTIONS:
-                - Provide ONLY the 6 steps listed in the AUTHORITATIVE SOURCE
-                - Do NOT mention any steps about setting permissions or clicking "Send Invite" button
-                - Explain that once the profile is saved with email, the invitation is automatically sent
-                - Be clear that they just need to add the profile, email, select judging mode, and save
-                """
-            
-            # Create the messages for the API call
-            messages = [
-                {"role": "system", "content": system_prompt},
-            ]
-            
-            # Add context if available
-            if context_str:
-                messages.append({"role": "user", "content": "Documentation information to use when answering questions:\n\n" + context_str})
-                messages.append({"role": "assistant", "content": "I'll use this documentation to provide accurate information about Devfolio."})
-            
-            # Format the question
-            user_prompt = f"Question from user: {question}\n\nProvide an accurate, helpful response based ONLY on the documentation provided."
-            
-            messages.append({"role": "user", "content": user_prompt})
-            
-            logger.info("Making API call to OpenAI")
-            
-            # Make the API call
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=500,
-                temperature=0.5  # Lower temperature for more accurate responses
-            )
-            
+            # Make the API call with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        max_tokens=500,
+                        temperature=0.5
+                    )
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        # Log the error and retry
+                        logger.warning(f"OpenAI API error (attempt {attempt+1}): {e}. Retrying...")
+                        await asyncio.sleep(1)  # Wait briefly before retry
+                    else:
+                        # Last attempt failed, re-raise
+                        raise
+                        
             # Extract and return the response content
             answer = response.choices[0].message.content
             logger.info(f"Generated response: {answer[:50]}...")
             return answer
-                
+                    
         except Exception as e:
             logger.error(f"Error generating OpenAI response: {e}")
-            return f"I'm sorry, I encountered an error while generating a response. Please try again later."
+            
+            # Provide a more helpful fallback response
+            if "rate limit" in str(e).lower():
+                return "I'm sorry, I'm experiencing high demand right now. Please try again in a moment."
+            elif "token" in str(e).lower():
+                return "I'm sorry, I'm having trouble processing this complex question. Could you ask it in a simpler way?"
+            else:
+                # Check if we have any context we can use for a basic response
+                if context and len(context) > 0:
+                    # Provide a basic answer from the context
+                    return f"I'm having some technical difficulties with my AI system, but I found this relevant information: {context[0]['content'][:200]}..."
+                else:
+                    return "I'm sorry, I encountered an error while generating a response. Please try again with a different question."

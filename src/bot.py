@@ -2,7 +2,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler
 import asyncio
-from src.typing_handler import TypingHandler
 import os
 import logging
 import time
@@ -17,8 +16,6 @@ from src.agentic_processor import AgenticProcessor
 # Load environment variables
 load_dotenv()
 
-agentic_processor = AgenticProcessor()
-
 # Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
@@ -26,13 +23,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Get environment variables
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")  # Changed from "TELEGRAM_BOT_TOKEN" to "BOT_TOKEN"
 ALLOWED_USERNAMES = os.getenv("ALLOWED_USERNAMES", "").split(",")
 
 # Initialize knowledge base, OpenAI client, and feedback system
 knowledge_base = KnowledgeBase()
 openai_client = OpenAIClient()
 feedback_system = FeedbackSystem()
+agentic_processor = AgenticProcessor()
 
 # Conversation context storage
 user_contexts = {}
@@ -42,7 +40,7 @@ pending_mentions = {}  # User mentioned bot but no question yet
 pending_questions = {}  # User asked question but no bot mention yet
 
 # Log configuration on startup
-logger.info(f"Starting bot with token: {TOKEN[:5]}...")
+logger.info(f"Starting bot with token: {TOKEN[:5] if TOKEN else 'None'}...")
 logger.info(f"Allowed usernames: {ALLOWED_USERNAMES}")
 
 # Check if a user is authorized to add the bot to a group
@@ -52,8 +50,6 @@ def is_authorized(username):
         return False
     return username in ALLOWED_USERNAMES or not ALLOWED_USERNAMES[0]  # Allow all if empty
 
-# Get or initialize user context
-# Get or initialize user context
 # Get or initialize user context
 def get_user_context(user_id):
     if user_id not in user_contexts:
@@ -67,8 +63,6 @@ def get_user_context(user_id):
         }
     return user_contexts[user_id]
 
-# Update user context
-# Update user context
 # Update user context
 def update_user_context(user_id, question, answer):
     context = get_user_context(user_id)
@@ -146,127 +140,6 @@ def get_greeting_response():
     import random
     return random.choice(greetings)
 
-# Check for pending mention
-def check_pending_mention(chat_id, user_id):
-    key = f"{chat_id}_{user_id}"
-    now = time.time()
-    
-    if key in pending_mentions:
-        timestamp, _ = pending_mentions[key]
-        # If mention is less than 60 seconds old, it's still valid
-        if now - timestamp < 60:
-            return True
-    return False
-
-# Set pending mention
-def set_pending_mention(chat_id, user_id):
-    key = f"{chat_id}_{user_id}"
-    pending_mentions[key] = (time.time(), None)
-    
-    # Schedule cleanup of old mentions
-    cleanup_old_pendings()
-
-# Get and clear pending mention
-def get_and_clear_pending_mention(chat_id, user_id):
-    key = f"{chat_id}_{user_id}"
-    if key in pending_mentions:
-        result = pending_mentions[key]
-        del pending_mentions[key]
-        return result
-    return None
-
-# Check for pending question
-def check_pending_question(chat_id, user_id):
-    key = f"{chat_id}_{user_id}"
-    now = time.time()
-    
-    if key in pending_questions:
-        timestamp, question = pending_questions[key]
-        # If question is less than 60 seconds old, it's still valid
-        if now - timestamp < 60:
-            return question
-    return None
-
-# Set pending question
-def set_pending_question(chat_id, user_id, question):
-    key = f"{chat_id}_{user_id}"
-    pending_questions[key] = (time.time(), question)
-    
-    # Schedule cleanup of old questions
-    cleanup_old_pendings()
-
-# Get and clear pending question
-def get_and_clear_pending_question(chat_id, user_id):
-    key = f"{chat_id}_{user_id}"
-    if key in pending_questions:
-        result = pending_questions[key]
-        del pending_questions[key]
-        return result
-    return None
-
-# Cleanup old pending mentions and questions
-def cleanup_old_pendings():
-    now = time.time()
-    
-    # Clean up mentions older than 60 seconds
-    for key in list(pending_mentions.keys()):
-        timestamp, _ = pending_mentions[key]
-        if now - timestamp > 60:
-            del pending_mentions[key]
-    
-    # Clean up questions older than 60 seconds
-    for key in list(pending_questions.keys()):
-        timestamp, _ = pending_questions[key]
-        if now - timestamp > 60:
-            del pending_questions[key]
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
-    user = update.effective_user
-    user_id = str(user.id)
-    logger.info(f"Start command from user: {user_id} ({user.username})")
-    
-    # Show typing indicator
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, 
-        action=ChatAction.TYPING
-    )
-    
-    response = f"Hi {user.first_name}! I'm DevfolioAsk Bot. How can I help you with managing your hackathon on Devfolio?"
-    await update.message.reply_text(response)
-    
-    # Store this interaction
-    feedback_system.store_interaction(user_id, "/start", response)
-    update_user_context(user_id, "/start", response)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /help is issued."""
-    user = update.effective_user
-    user_id = str(user.id)
-    logger.info(f"Help command from user: {user_id} ({user.username})")
-    
-    # Show typing indicator
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, 
-        action=ChatAction.TYPING
-    )
-    
-    help_text = """
-I'm DevfolioAsk Bot, your Devfolio assistant!
-
-In a group chat:
-- Mention me with @devfolioask_bot followed by your question
-- Example: @devfolioask_bot How to add judges to the platform?
-
-
-I'll do my best to provide accurate information based on Devfolio documentation.
-    """
-    await update.message.reply_text(help_text)
-    
-    # Store this interaction
-    feedback_system.store_interaction(user_id, "/help", help_text)
-    update_user_context(user_id, "/help", help_text)
-
 async def process_question(question: str, user_id: str = None, chat_id: str = None, bot = None) -> tuple:
     """
     Process a question using the agentic processor.
@@ -308,6 +181,57 @@ async def process_question(question: str, user_id: str = None, chat_id: str = No
         logger.error(f"Error processing question: {e}")
         answer = f"I'm sorry, I encountered an error while generating a response. Please try again later."
         return answer, None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a message when the command /start is issued."""
+    user = update.effective_user
+    user_id = str(user.id)
+    logger.info(f"Start command from user: {user_id} ({user.username})")
+    
+    # Show typing indicator
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action=ChatAction.TYPING
+    )
+    
+    response = f"Hi {user.first_name}! I'm DevfolioAsk Bot. How can I help you with managing your hackathon on Devfolio?"
+    await update.message.reply_text(response)
+    
+    # Store this interaction
+    feedback_system.store_interaction(user_id, "/start", response)
+    update_user_context(user_id, "/start", response)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a message when the command /help is issued."""
+    user = update.effective_user
+    user_id = str(user.id)
+    logger.info(f"Help command from user: {user_id} ({user.username})")
+    
+    # Show typing indicator
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action=ChatAction.TYPING
+    )
+    
+    help_text = """
+I'm DevfolioAsk Bot, your Devfolio assistant!
+
+In a group chat:
+- Mention me with @devfolioask_bot followed by your question
+- Example: @devfolioask_bot How to add judges to the platform?
+- Or use /ask followed by your question
+
+In private chat:
+- Just send your question directly
+- Use /give_feedback to provide feedback on previous answers
+
+I'll do my best to provide accurate information based on Devfolio documentation.
+    """
+    await update.message.reply_text(help_text)
+    
+    # Store this interaction
+    feedback_system.store_interaction(user_id, "/help", help_text)
+    update_user_context(user_id, "/help", help_text)
 
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /ask command."""
@@ -368,93 +292,6 @@ async def give_feedback_command(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Store this interaction
     feedback_system.store_interaction(user_id, "/give_feedback", message)
-
-# Extract question from message with bot mention
-def extract_question_from_mention(text, bot_username):
-    """
-    Extract question from a message that mentions the bot.
-    
-    This handles various patterns:
-    - Mention at start: "@bot how do I..."
-    - Mention in middle: "I want to ask @bot how do I..."
-    - Mention at end: "How do I add judges? @bot"
-    - Mention on separate line: "How do I add judges?\n@bot"
-    """
-    # Log the original text for debugging
-    logger.debug(f"Extracting question from: {text}")
-    
-    # Full bot mention with @ symbol
-    bot_mention = f"@{bot_username}"
-    
-    # Check if the text contains the bot mention
-    if bot_mention.lower() not in text.lower():
-        return ""
-    
-    # CASE 1: Simple greeting with bot mention - treat the whole thing as a greeting
-    text_without_mention = re.sub(f'@{bot_username}', '', text, flags=re.IGNORECASE).strip()
-    if is_greeting(text_without_mention) or not text_without_mention:
-        logger.debug("Detected greeting with bot mention")
-        return "greeting"
-        
-    # CASE 2: If mention is at the beginning, take everything after as the question
-    if text.lower().strip().startswith(bot_mention.lower()):
-        question = text[text.lower().find(bot_mention.lower()) + len(bot_mention):].strip()
-        logger.debug(f"Bot mention at beginning. Question: {question}")
-        if question:
-            return question
-        else:
-            return "greeting"  # Just the mention with nothing after
-    
-    # CASE 3: If mention is at the end, take everything before as the question
-    if text.lower().strip().endswith(bot_mention.lower()):
-        question = text[:text.lower().rfind(bot_mention.lower())].strip()
-        logger.debug(f"Bot mention at end. Question: {question}")
-        return question
-    
-    # CASE 4: If mention is on its own line, get the surrounding content
-    lines = text.split('\n')
-    for i, line in enumerate(lines):
-        if bot_mention.lower() in line.lower() and line.strip().lower() == bot_mention.lower():
-            # If mention is on last line, take everything before
-            if i == len(lines) - 1:
-                question = '\n'.join(lines[:i]).strip()
-                logger.debug(f"Bot mention on last line. Question: {question}")
-                return question
-            # If mention is on first line, take everything after
-            elif i == 0 and len(lines) > 1:
-                question = '\n'.join(lines[1:]).strip()
-                logger.debug(f"Bot mention on first line. Question: {question}")
-                return question
-            # If mention is in the middle on its own line, take everything
-            else:
-                question_before = '\n'.join(lines[:i]).strip()
-                question_after = '\n'.join(lines[i+1:]).strip()
-                # Prefer what comes after the mention if available
-                if question_after:
-                    logger.debug(f"Bot mention in middle (own line). Using after: {question_after}")
-                    return question_after
-                else:
-                    logger.debug(f"Bot mention in middle (own line). Using before: {question_before}")
-                    return question_before
-    
-    # CASE 5: Mention is in the middle of text on same line
-    parts = re.split(f'@{bot_username}', text, flags=re.IGNORECASE)
-    if len(parts) == 2:
-        before = parts[0].strip()
-        after = parts[1].strip()
-        
-        # Prefer what comes after the mention
-        if after:
-            logger.debug(f"Bot mention in middle (same line). Using after: {after}")
-            return after
-        # Otherwise use what comes before
-        elif before:
-            logger.debug(f"Bot mention in middle (same line). Using before: {before}")
-            return before
-    
-    # CASE 6: Just take the whole message as the question
-    logger.debug(f"Using entire message as question: {text}")
-    return text
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages."""
@@ -559,6 +396,167 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if is_likely_question:
                     logger.debug(f"Storing potential question for future mention: {text[:30]}...")
                     set_pending_question(chat_id, user_id, text)
+
+# Extract question from message with bot mention
+def extract_question_from_mention(text, bot_username):
+    """
+    Extract question from a message that mentions the bot.
+    
+    This handles various patterns:
+    - Mention at start: "@bot how do I..."
+    - Mention in middle: "I want to ask @bot how do I..."
+    - Mention at end: "How do I add judges? @bot"
+    - Mention on separate line: "How do I add judges?\n@bot"
+    """
+    # Log the original text for debugging
+    logger.debug(f"Extracting question from: {text}")
+    
+    # Full bot mention with @ symbol
+    bot_mention = f"@{bot_username}"
+    
+    # Check if the text contains the bot mention
+    if bot_mention.lower() not in text.lower():
+        return ""
+    
+    # CASE 1: Simple greeting with bot mention - treat the whole thing as a greeting
+    text_without_mention = re.sub(f'@{bot_username}', '', text, flags=re.IGNORECASE).strip()
+    if is_greeting(text_without_mention) or not text_without_mention:
+        logger.debug("Detected greeting with bot mention")
+        return "greeting"
+        
+    # CASE 2: If mention is at the beginning, take everything after as the question
+    if text.lower().strip().startswith(bot_mention.lower()):
+        question = text[text.lower().find(bot_mention.lower()) + len(bot_mention):].strip()
+        logger.debug(f"Bot mention at beginning. Question: {question}")
+        if question:
+            return question
+        else:
+            return "greeting"  # Just the mention with nothing after
+    
+    # CASE 3: If mention is at the end, take everything before as the question
+    if text.lower().strip().endswith(bot_mention.lower()):
+        question = text[:text.lower().rfind(bot_mention.lower())].strip()
+        logger.debug(f"Bot mention at end. Question: {question}")
+        return question
+    
+    # CASE 4: If mention is on its own line, get the surrounding content
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if bot_mention.lower() in line.lower() and line.strip().lower() == bot_mention.lower():
+            # If mention is on last line, take everything before
+            if i == len(lines) - 1:
+                question = '\n'.join(lines[:i]).strip()
+                logger.debug(f"Bot mention on last line. Question: {question}")
+                return question
+            # If mention is on first line, take everything after
+            elif i == 0 and len(lines) > 1:
+                question = '\n'.join(lines[1:]).strip()
+                logger.debug(f"Bot mention on first line. Question: {question}")
+                return question
+            # If mention is in the middle on its own line, take everything
+            else:
+                question_before = '\n'.join(lines[:i]).strip()
+                question_after = '\n'.join(lines[i+1:]).strip()
+                # Prefer what comes after the mention if available
+                if question_after:
+                    logger.debug(f"Bot mention in middle (own line). Using after: {question_after}")
+                    return question_after
+                else:
+                    logger.debug(f"Bot mention in middle (own line). Using before: {question_before}")
+                    return question_before
+    
+    # CASE 5: Mention is in the middle of text on same line
+    parts = re.split(f'@{bot_username}', text, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        before = parts[0].strip()
+        after = parts[1].strip()
+        
+        # Prefer what comes after the mention
+        if after:
+            logger.debug(f"Bot mention in middle (same line). Using after: {after}")
+            return after
+        # Otherwise use what comes before
+        elif before:
+            logger.debug(f"Bot mention in middle (same line). Using before: {before}")
+            return before
+    
+    # CASE 6: Just take the whole message as the question
+    logger.debug(f"Using entire message as question: {text}")
+    return text
+
+# Check for pending mention
+def check_pending_mention(chat_id, user_id):
+    key = f"{chat_id}_{user_id}"
+    now = time.time()
+    
+    if key in pending_mentions:
+        timestamp, _ = pending_mentions[key]
+        # If mention is less than 60 seconds old, it's still valid
+        if now - timestamp < 60:
+            return True
+    return False
+
+# Set pending mention
+def set_pending_mention(chat_id, user_id):
+    key = f"{chat_id}_{user_id}"
+    pending_mentions[key] = (time.time(), None)
+    
+    # Schedule cleanup of old mentions
+    cleanup_old_pendings()
+
+# Get and clear pending mention
+def get_and_clear_pending_mention(chat_id, user_id):
+    key = f"{chat_id}_{user_id}"
+    if key in pending_mentions:
+        result = pending_mentions[key]
+        del pending_mentions[key]
+        return result
+    return None
+
+# Check for pending question
+def check_pending_question(chat_id, user_id):
+    key = f"{chat_id}_{user_id}"
+    now = time.time()
+    
+    if key in pending_questions:
+        timestamp, question = pending_questions[key]
+        # If question is less than 60 seconds old, it's still valid
+        if now - timestamp < 60:
+            return question
+    return None
+
+# Set pending question
+def set_pending_question(chat_id, user_id, question):
+    key = f"{chat_id}_{user_id}"
+    pending_questions[key] = (time.time(), question)
+    
+    # Schedule cleanup of old questions
+    cleanup_old_pendings()
+
+# Get and clear pending question
+def get_and_clear_pending_question(chat_id, user_id):
+    key = f"{chat_id}_{user_id}"
+    if key in pending_questions:
+        result = pending_questions[key]
+        del pending_questions[key]
+        return result
+    return None
+
+# Cleanup old pending mentions and questions
+def cleanup_old_pendings():
+    now = time.time()
+    
+    # Clean up mentions older than 60 seconds
+    for key in list(pending_mentions.keys()):
+        timestamp, _ = pending_mentions[key]
+        if now - timestamp > 60:
+            del pending_mentions[key]
+    
+    # Clean up questions older than 60 seconds
+    for key in list(pending_questions.keys()):
+        timestamp, _ = pending_questions[key]
+        if now - timestamp > 60:
+            del pending_questions[key]
 
 async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Welcome new members and check authorization for adding the bot."""
