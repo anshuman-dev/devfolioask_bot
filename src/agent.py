@@ -107,7 +107,7 @@ class DevfolioAgent:
         
         Args:
             processed_query: The processed query data
-            conversation_context: Conversation history and context
+            conversation_context: Enhanced conversation history and context
             
         Returns:
             Plan dictionary with steps to execute
@@ -120,6 +120,29 @@ class DevfolioAgent:
                 "question": processed_query['cleaned_query']
             }
             
+        # Check conversation context for last discussed scenario
+        if conversation_context and "conversation" in conversation_context:
+            if conversation_context["conversation"].get("last_scenario_discussed"):
+                last_scenario = conversation_context["conversation"]["last_scenario_discussed"]
+                # If this seems like a follow-up based on intent
+                if processed_query['intent']['type'] == "followup":
+                    return {
+                        "type": "followup_scenario",
+                        "scenario_id": last_scenario,
+                        "question": processed_query['cleaned_query']
+                    }
+        
+        # Check hackathon state for context-aware responses
+        hackathon_context = {}
+        if conversation_context and "hackathon_state" in conversation_context:
+            hackathon_state = conversation_context["hackathon_state"]
+            if hackathon_state.get("current_phase"):
+                hackathon_context["phase"] = hackathon_state["current_phase"]
+            if hackathon_state.get("hackathon_name"):
+                hackathon_context["name"] = hackathon_state["hackathon_name"]
+            if hackathon_state.get("has_enabled_judging"):
+                hackathon_context["judging_enabled"] = True
+        
         # For high-confidence semantic matches, use a direct scenario plan
         if processed_query.get('relevant_scenarios') and len(processed_query['relevant_scenarios']) > 0:
             top_scenario, confidence = processed_query['relevant_scenarios'][0]
@@ -128,7 +151,8 @@ class DevfolioAgent:
                     "type": "direct_scenario",
                     "scenario_id": top_scenario['scenario_id'],
                     "confidence": confidence,
-                    "related_scenarios": [s['scenario_id'] for s, _ in processed_query['relevant_scenarios'][1:3]]
+                    "related_scenarios": [s['scenario_id'] for s, _ in processed_query['relevant_scenarios'][1:3]],
+                    "hackathon_context": hackathon_context
                 }
                 
         # For medium-confidence matches, use a hybrid plan
@@ -140,14 +164,28 @@ class DevfolioAgent:
                     "primary_scenario_id": top_scenario['scenario_id'],
                     "confidence": confidence,
                     "related_scenarios": [s['scenario_id'] for s, _ in processed_query['relevant_scenarios'][1:3]],
-                    "use_openai_enhancement": True
+                    "use_openai_enhancement": True,
+                    "hackathon_context": hackathon_context
                 }
                 
+        # Check user preferences to enhance the reasoning plan
+        user_preferences = {}
+        if conversation_context and "preferences" in conversation_context:
+            preferences = conversation_context["preferences"]
+            if preferences.get("judging_mode_preference"):
+                user_preferences["judging_mode"] = preferences["judging_mode_preference"]
+            if preferences.get("previous_concerns"):
+                user_preferences["previous_concerns"] = preferences["previous_concerns"]
+        
         # For complex or unclear queries, use the reasoning plan with OpenAI
-        # This is where the real reasoning shines
+        # Enhance the call with our rich context
         reasoning_plan = await self.openai_client.create_plan(
             processed_query, 
-            conversation_context
+            {
+                "conversation": conversation_context.get("conversation", {}),
+                "hackathon_state": hackathon_context,
+                "preferences": user_preferences
+            }
         )
         
         return reasoning_plan

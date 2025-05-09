@@ -62,7 +62,7 @@ class PlanExecutor:
             return await self._execute_basic_plan(plan, processed_query, conversation_context)
     
     async def _execute_direct_scenario_plan(self, plan: Dict[str, Any], 
-                                      processed_query: Dict[str, Any]) -> Dict[str, Any]:
+                                  processed_query: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a direct scenario plan where a high-confidence match was found.
         
@@ -87,6 +87,12 @@ class PlanExecutor:
         # Extract variables from the query
         variables = self._extract_variables(processed_query, scenario)
         
+        # Add hackathon context if available
+        if "hackathon_context" in plan and plan["hackathon_context"]:
+            hc = plan["hackathon_context"]
+            if "name" in hc:
+                variables["hackathon_name"] = hc["name"]
+        
         # Get related scenarios if specified
         related_scenarios = []
         for related_id in plan.get("related_scenarios", []):
@@ -108,6 +114,18 @@ class PlanExecutor:
                 related_info += f"- {related['title']}\n"
             response += related_info
             
+        # Add phase-specific guidance if available
+        if "hackathon_context" in plan and plan["hackathon_context"].get("phase"):
+            phase = plan["hackathon_context"]["phase"]
+            if phase == "planning":
+                response += "\n\nSince you're in the planning phase, you might also want to look at setting up your hackathon page and configuring the basic settings."
+            elif phase == "setup":
+                response += "\n\nAs you're in the setup phase, remember to also configure your submission requirements and customize your hackathon page."
+            elif phase == "active":
+                response += "\n\nSince your hackathon is active, consider monitoring submissions and preparing for the judging phase."
+            elif phase == "judging":
+                response += "\n\nWith judging in progress, ensure all your judges have access and understand how to evaluate projects."
+                
         return {
             "success": True,
             "steps": [
@@ -118,152 +136,6 @@ class PlanExecutor:
             "final_response": response,
             "scenario_used": scenario,
             "related_scenarios": related_scenarios
-        }
-    
-    async def _execute_followup_scenario_plan(self, plan: Dict[str, Any], 
-                                        processed_query: Dict[str, Any],
-                                        conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute a plan for a follow-up question to a previous scenario.
-        
-        Args:
-            plan: Followup scenario plan
-            processed_query: Processed query
-            conversation_context: Conversation context
-            
-        Returns:
-            Execution results
-        """
-        scenario_id = plan.get("scenario_id")
-        scenario = self.scenario_kb.get_scenario_by_id(scenario_id)
-        
-        if not scenario:
-            logger.error(f"Scenario not found for ID: {scenario_id}")
-            return {
-                "success": False,
-                "error": f"Scenario not found: {scenario_id}",
-                "steps": [{"type": "error", "message": "Scenario not found"}]
-            }
-            
-        # Extract variables from the query
-        variables = self._extract_variables(processed_query, scenario)
-        
-        # Render the scenario response with follow-up awareness
-        response = self.scenario_kb.render_scenario_response(
-            scenario, 
-            variables, 
-            question=processed_query.get("cleaned_query"),
-            is_followup=True
-        )
-        
-        return {
-            "success": True,
-            "steps": [
-                {"type": "identify_followup", "scenario_id": scenario_id},
-                {"type": "extract_variables", "variables": variables},
-                {"type": "render_followup_response", "scenario_title": scenario.get("title")}
-            ],
-            "final_response": response,
-            "scenario_used": scenario
-        }
-    
-    async def _execute_hybrid_scenario_plan(self, plan: Dict[str, Any], 
-                                      processed_query: Dict[str, Any],
-                                      conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute a hybrid plan using both scenario knowledge and OpenAI enhancement.
-        
-        Args:
-            plan: Hybrid scenario plan
-            processed_query: Processed query
-            conversation_context: Conversation context
-            
-        Returns:
-            Execution results
-        """
-        # First, retrieve the scenarios
-        primary_scenario_id = plan.get("primary_scenario_id")
-        primary_scenario = self.scenario_kb.get_scenario_by_id(primary_scenario_id)
-        
-        if not primary_scenario:
-            logger.error(f"Primary scenario not found for ID: {primary_scenario_id}")
-            return await self._execute_reasoning_plan(plan, processed_query, conversation_context)
-            
-        # Get related scenarios
-        related_scenarios = []
-        for related_id in plan.get("related_scenarios", []):
-            related = self.scenario_kb.get_scenario_by_id(related_id)
-            if related:
-                related_scenarios.append(related)
-                
-        # Create rich context from the scenarios
-        rich_context = []
-        
-        # Add primary scenario context
-        scenario_context = f"Scenario: {primary_scenario['title']} (primary)\n\n"
-        
-        # Include the template and components
-        if "answer_template" in primary_scenario:
-            scenario_context += f"Template: {primary_scenario['answer_template']}\n\n"
-            
-        if "answer_components" in primary_scenario:
-            components = primary_scenario["answer_components"]
-            if "steps" in components and components["steps"]:
-                scenario_context += "Steps:\n" + "\n".join([f"- {step}" for step in components["steps"]]) + "\n\n"
-            if "notes" in components and components["notes"]:
-                scenario_context += f"Notes: {components['notes']}\n\n"
-            if "common_issues" in components and components["common_issues"]:
-                scenario_context += f"Common issues: {components['common_issues']}\n\n"
-                
-        rich_context.append({"source": primary_scenario['title'], "content": scenario_context})
-        
-        # Add related scenario context
-        for related in related_scenarios:
-            related_context = f"Related scenario: {related['title']}\n\n"
-            
-            # Include key information
-            if "answer_components" in related:
-                components = related["answer_components"]
-                if "steps" in components and components["steps"]:
-                    related_context += "Steps:\n" + "\n".join([f"- {step}" for step in components["steps"]]) + "\n\n"
-                    
-            rich_context.append({"source": related['title'], "content": related_context})
-        
-        # Get additional context from traditional KB as fallback
-        _, knowledge_context = self.knowledge_base.query(processed_query["cleaned_query"])
-        if knowledge_context:
-            rich_context.extend(knowledge_context)
-        
-        # Format conversation context
-        context_info = ""
-        if conversation_context:
-            context_info = self._format_conversation_context(conversation_context)
-            
-        # Add intent information
-        intent_info = f"The user's query has been classified as a {processed_query['intent']['type']} intent."
-        if processed_query.get('is_followup', False):
-            intent_info += " This appears to be a follow-up question to a previous query."
-        context_info += "\n" + intent_info
-        
-        # Generate enhanced response using OpenAI
-        response = await self.openai_client.generate_response(
-            processed_query['cleaned_query'], 
-            rich_context, 
-            context_info
-        )
-        
-        return {
-            "success": True,
-            "steps": [
-                {"type": "retrieve_primary_scenario", "scenario_id": primary_scenario_id},
-                {"type": "retrieve_related_scenarios", "scenario_ids": plan.get("related_scenarios", [])},
-                {"type": "create_rich_context", "num_sources": len(rich_context)},
-                {"type": "generate_enhanced_response"}
-            ],
-            "final_response": response,
-            "primary_scenario": primary_scenario,
-            "related_scenarios": related_scenarios,
-            "rich_context": rich_context
         }
     
     async def _execute_reasoning_plan(self, plan: Dict[str, Any], 

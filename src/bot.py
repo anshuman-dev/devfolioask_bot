@@ -12,6 +12,8 @@ from src.knowledge import KnowledgeBase
 from src.openai_client import OpenAIClient
 from src.feedback import FeedbackSystem
 from src.agentic_processor import AgenticProcessor
+from src.context_store import ContextStore
+from src.context_inference_engine import ContextInferenceEngine
 
 # Load environment variables
 load_dotenv()
@@ -23,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Get environment variables
-TOKEN = os.getenv("BOT_TOKEN")  # Changed from "TELEGRAM_BOT_TOKEN" to "BOT_TOKEN"
+TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERNAMES = os.getenv("ALLOWED_USERNAMES", "").split(",")
 
 # Initialize knowledge base, OpenAI client, and feedback system
@@ -32,8 +34,9 @@ openai_client = OpenAIClient()
 feedback_system = FeedbackSystem()
 agentic_processor = AgenticProcessor()
 
-# Conversation context storage
-user_contexts = {}
+# Initialize context management
+context_store = ContextStore()
+context_inference_engine = ContextInferenceEngine()
 
 # Pending questions/mentions tracking
 pending_mentions = {}  # User mentioned bot but no question yet
@@ -50,58 +53,49 @@ def is_authorized(username):
         return False
     return username in ALLOWED_USERNAMES or not ALLOWED_USERNAMES[0]  # Allow all if empty
 
-# Get or initialize user context
-def get_user_context(user_id):
-    if user_id not in user_contexts:
-        user_contexts[user_id] = {
-            "recent_questions": [],
-            "recent_answers": [],
-            "judging_mode_preference": None,
-            "judging_enabled": False,
-            "support_contact_suggested": False,
-            "last_interaction_time": time.time()
-        }
-    return user_contexts[user_id]
+def get_user_context(user_id: str, username: str = None) -> Dict[str, Any]:
+    """
+    Get user context with enhanced structure.
+    
+    Args:
+        user_id: User ID to get context for
+        username: Optional username to store in context
+        
+    Returns:
+        User context dictionary
+    """
+    # Get context from store
+    context = context_store.get_user_context(user_id)
+    
+    # Update username if provided
+    if username and not context["identity"]["username"]:
+        context["identity"]["username"] = username
+        context_store.update_user_context(user_id, context)
+        
+    return context
 
-# Update user context
-def update_user_context(user_id, question, answer):
+def update_user_context(user_id: str, question: str, answer: str) -> Dict[str, Any]:
+    """
+    Update user context with enhanced inference.
+    
+    Args:
+        user_id: User ID to update context for
+        question: User's question
+        answer: Bot's answer
+        
+    Returns:
+        Updated context dictionary
+    """
+    # Get current context
     context = get_user_context(user_id)
     
-    # Add to recent interactions
-    context["recent_questions"].append(question)
-    context["recent_answers"].append(answer)
+    # Use inference engine to update context based on conversation
+    updated_context = context_inference_engine.update_context(context, question, answer)
     
-    # Keep only last 5 interactions
-    if len(context["recent_questions"]) > 5:
-        context["recent_questions"] = context["recent_questions"][-5:]
-        context["recent_answers"] = context["recent_answers"][-5:]
+    # Save to context store
+    context_store.update_user_context(user_id, updated_context)
     
-    # Update last interaction time
-    context["last_interaction_time"] = time.time()
-    
-    # Track judging-related information
-    question_lower = question.lower()
-    answer_lower = answer.lower()
-    
-    # Extract judging mode preferences
-    if "online judging" in question_lower or "online judging" in answer_lower:
-        context["judging_mode_preference"] = "online"
-    elif "offline judging" in question_lower or "offline judging" in answer_lower:
-        context["judging_mode_preference"] = "offline"
-    elif "sponsor judging" in question_lower or "sponsor judging" in answer_lower:
-        context["judging_mode_preference"] = "sponsor"
-    
-    # Track if judging has been enabled
-    if ("enabled judging" in answer_lower or "judging is now enabled" in answer_lower or 
-        "have enabled" in answer_lower and "judging" in answer_lower):
-        context["judging_enabled"] = True
-    
-    # Track if user has been instructed to contact support
-    if "@singhanshuman8" in answer:
-        context["support_contact_suggested"] = True
-    
-    # Save updated context
-    user_contexts[user_id] = context
+    return updated_context
 
 # Check if message is a simple greeting
 def is_greeting(text):
@@ -156,8 +150,8 @@ async def process_question(question: str, user_id: str = None, chat_id: str = No
     try:
         # Get user context if available
         conversation_context = None
-        if user_id and user_id in user_contexts:
-            conversation_context = user_contexts[user_id]
+        if user_id:
+            conversation_context = get_user_context(user_id)
         
         # Process using agentic processor
         answer, interaction_id = await agentic_processor.process_question(
@@ -186,13 +180,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     user = update.effective_user
     user_id = str(user.id)
-    logger.info(f"Start command from user: {user_id} ({user.username})")
+    username = user.username
+    logger.info(f"Start command from user: {user_id} ({username})")
     
     # Show typing indicator
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, 
         action=ChatAction.TYPING
     )
+    
+    # Get user context with username
+    user_context = get_user_context(user_id, username)
     
     response = f"Hi {user.first_name}! I'm DevfolioAsk Bot. How can I help you with managing your hackathon on Devfolio?"
     await update.message.reply_text(response)
@@ -292,6 +290,21 @@ async def give_feedback_command(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Store this interaction
     feedback_system.store_interaction(user_id, "/give_feedback", message)
+
+async def save_contexts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to manually save all contexts."""
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    # Check if user is an admin
+    if user_id not in os.getenv("ADMIN_IDS", "").split(","):
+        await update.message.reply_text("Sorry, only admins can use this command.")
+        return
+        
+    # Save all contexts
+    context_store.save_all_dirty()
+    
+    await update.message.reply_text("All user contexts have been saved.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages."""
@@ -612,12 +625,18 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("ask", ask_command))
     application.add_handler(CommandHandler("give_feedback", give_feedback_command))
+    application.add_handler(CommandHandler("save_contexts", save_contexts_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot is starting...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    finally:
+        # Save all contexts on shutdown
+        logger.info("Bot shutting down, saving all contexts...")
+        context_store.save_all_dirty()
 
 if __name__ == "__main__":
     main()
