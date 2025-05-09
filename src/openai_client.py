@@ -263,3 +263,226 @@ class OpenAIClient:
         except Exception as e:
             logger.error(f"Error in simple completion: {e}")
             return f"Error generating completion: {str(e)}"
+
+        async def generate_enhanced_response(self, query_data: Dict[str, Any], 
+                               scenario_data: Dict[str, Any],
+                               user_context: Dict[str, Any],
+                               execution_results: Dict[str, Any]) -> str:
+    """
+    Generate a high-quality response using enhanced prompting.
+    
+    Args:
+        query_data: Processed query information
+        scenario_data: Scenario knowledge
+        user_context: User context information
+        execution_results: Results from plan execution
+        
+    Returns:
+        Generated response text
+    """
+    try:
+        # Extract intent for better tone
+        intent = query_data.get("intent", {}).get("type", "question")
+        
+        # Extract query information
+        query = query_data.get("cleaned_query", query_data.get("original_query", "Unknown query"))
+        
+        # Format scenario information
+        scenario_info = ""
+        if scenario_data:
+            scenario_info = f"# Scenario: {scenario_data.get('title', 'Unknown')} #\n\n"
+            
+            # Add template if available
+            if "answer_template" in scenario_data:
+                scenario_info += f"Template: {scenario_data['answer_template']}\n\n"
+                
+            # Add components if available
+            if "answer_components" in scenario_data:
+                components = scenario_data["answer_components"]
+                
+                if "steps" in components and components["steps"]:
+                    scenario_info += "Steps:\n" + "\n".join([f"- {step}" for step in components["steps"]]) + "\n\n"
+                    
+                if "notes" in components and components["notes"]:
+                    scenario_info += f"Notes: {components['notes']}\n\n"
+                    
+                if "common_issues" in components and components["common_issues"]:
+                    scenario_info += f"Common issues: {components['common_issues']}\n\n"
+        
+        # Format user context
+        context_info = ""
+        if user_context:
+            context_info = "# User Context #\n\n"
+            
+            # Add hackathon state
+            if "hackathon_state" in user_context:
+                hackathon_state = user_context["hackathon_state"]
+                if hackathon_state.get("hackathon_name"):
+                    context_info += f"Hackathon name: {hackathon_state['hackathon_name']}\n"
+                if hackathon_state.get("current_phase"):
+                    context_info += f"Current phase: {hackathon_state['current_phase']}\n"
+                if hackathon_state.get("has_enabled_judging"):
+                    context_info += "Judging is enabled.\n"
+                    
+            # Add preferences
+            if "preferences" in user_context:
+                preferences = user_context["preferences"]
+                if preferences.get("judging_mode_preference"):
+                    context_info += f"Preferred judging mode: {preferences['judging_mode_preference']}\n"
+                
+            context_info += "\n"
+            
+            # Add conversation info
+            if "conversation" in user_context:
+                conversation = user_context["conversation"]
+                if conversation.get("interaction_count"):
+                    context_info += f"Interaction count: {conversation['interaction_count']}\n"
+                if conversation.get("last_scenario_discussed"):
+                    context_info += f"Last topic discussed: {conversation['last_scenario_discussed']}\n"
+        
+        # Format execution results
+        execution_info = ""
+        if execution_results:
+            execution_info = "# Execution Results #\n\n"
+            
+            # Add retrieved information
+            if "retrieved_information" in execution_results:
+                info = execution_results["retrieved_information"]
+                if isinstance(info, dict):
+                    execution_info += json.dumps(info, indent=2) + "\n\n"
+                else:
+                    execution_info += str(info) + "\n\n"
+                    
+            # Add reasoning output
+            if "reasoning_output" in execution_results:
+                reasoning = execution_results["reasoning_output"]
+                if isinstance(reasoning, dict) and "conclusion" in reasoning:
+                    execution_info += f"Reasoning conclusion: {reasoning['conclusion']}\n\n"
+        
+        # Create the system prompt
+        system_prompt = f"""
+        You are DevfolioAsk, an intelligent assistant that provides helpful, accurate information about the Devfolio hackathon platform.
+        
+        ## GUIDELINES FOR RESPONDING TO THIS QUERY ##
+        
+        1. TONE AND STYLE:
+           - Be conversational but concise and to the point
+           - This is a {intent} request, so your tone should be {self._get_tone_for_intent(intent)}
+           - Start with a brief, friendly greeting
+           - Focus the body of your response on direct answers with specific steps when relevant
+           - End with a brief helpful closing sentence
+        
+        2. CONTENT REQUIREMENTS:
+           - If specific steps are provided, include ALL of them in your response
+           - Order steps logically and number them clearly
+           - Emphasize important information by placing it early in your response
+           - If there are common issues or troubleshooting notes, include them after the main content
+           - Keep explanations accurate and factual based on the Devfolio platform
+        
+        3. FORMATTING:
+           - Use clear paragraph breaks between main sections
+           - Use numbered lists for steps (1., 2., 3., etc.)
+           - Use concise language, avoiding unnecessary words
+           - Keep your total response under 350 words unless the query requires detailed explanation
+        
+        4. PERSONALIZATION:
+           - Use the user's context to personalize the response when relevant
+           - If the user has mentioned a specific hackathon, refer to it by name
+           - Adjust your response based on the hackathon phase (planning, setup, active, judging)
+        
+        ## SCENARIO INFORMATION ##
+        {scenario_info}
+        
+        ## USER CONTEXT ##
+        {context_info}
+        
+        ## EXECUTION RESULTS ##
+        {execution_info}
+        """
+        
+        # Create the user prompt
+        user_prompt = f"Question from user: {query}\n\nPlease provide a helpful response following the guidelines."
+        
+        # Make the API call
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=600,
+            temperature=0.7  # Slightly higher for more natural responses
+        )
+        
+        # Extract and return the response content
+        answer = response.choices[0].message.content.strip()
+        logger.info(f"Generated enhanced response: {answer[:50]}...")
+        
+        # Validate and improve the response
+        return self._validate_response(answer, query_data, scenario_data)
+        
+    except Exception as e:
+        logger.error(f"Error generating enhanced response: {e}")
+        return f"I apologize, but I encountered an error while generating a detailed response. Please try asking in a different way."
+    
+def _get_tone_for_intent(self, intent: str) -> str:
+    """Get the appropriate tone for an intent."""
+    tone_map = {
+        "question": "helpful and informative",
+        "problem": "empathetic and solution-focused",
+        "followup": "clarifying and direct",
+        "greeting": "warm and welcoming",
+        "feedback": "appreciative and receptive",
+        "clarification": "patient and thorough"
+    }
+    
+    return tone_map.get(intent, "helpful and informative")
+
+def _validate_response(self, response: str, query_data: Dict[str, Any], 
+                      scenario_data: Dict[str, Any]) -> str:
+    """
+    Validate and improve a generated response.
+    
+    Args:
+        response: Generated response to validate
+        query_data: Query information
+        scenario_data: Scenario data
+        
+    Returns:
+        Validated and potentially improved response
+    """
+    # Check if the response is empty or too short
+    if not response or len(response) < 50:
+        return "I apologize, but I couldn't generate a helpful response. Could you please rephrase your question?"
+    
+    # Check if this is a step-by-step instruction scenario
+    if scenario_data and "answer_components" in scenario_data and "steps" in scenario_data["answer_components"]:
+        steps = scenario_data["answer_components"]["steps"]
+        
+        # Check if response contains steps
+        contains_steps = any(f"{i+1}." in response for i in range(len(steps)))
+        
+        # If there are steps but the response doesn't have them formatted properly, add them
+        if steps and not contains_steps:
+            # Find where to insert steps
+            step_insertion_point = response.find("\n\n")
+            if step_insertion_point == -1:
+                step_insertion_point = len(response) // 2  # Insert in the middle if no clear break
+                
+            # Format steps
+            formatted_steps = "\n\n"
+            for i, step in enumerate(steps):
+                formatted_steps += f"{i+1}. {step}\n"
+            formatted_steps += "\n"
+            
+            # Insert steps
+            response = response[:step_insertion_point] + formatted_steps + response[step_insertion_point:]
+    
+    # Check if this is a problem-solving intent but the response doesn't address it
+    intent = query_data.get("intent", {}).get("type", "")
+    if intent == "problem" and "problem" not in response.lower() and "issue" not in response.lower() and "troubleshoot" not in response.lower():
+        response = "I understand you're experiencing an issue. " + response
+    
+    return response

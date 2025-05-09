@@ -62,13 +62,15 @@ class PlanExecutor:
             return await self._execute_basic_plan(plan, processed_query, conversation_context)
     
     async def _execute_direct_scenario_plan(self, plan: Dict[str, Any], 
-                                  processed_query: Dict[str, Any]) -> Dict[str, Any]:
+                                  processed_query: Dict[str, Any],
+                                  conversation_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute a direct scenario plan where a high-confidence match was found.
         
         Args:
             plan: Direct scenario plan
             processed_query: Processed query data
+            conversation_context: Optional conversation context
             
         Returns:
             Execution results
@@ -83,7 +85,7 @@ class PlanExecutor:
                 "error": f"Scenario not found: {scenario_id}",
                 "steps": [{"type": "error", "message": "Scenario not found"}]
             }
-            
+                
         # Extract variables from the query
         variables = self._extract_variables(processed_query, scenario)
         
@@ -100,31 +102,27 @@ class PlanExecutor:
             if related:
                 related_scenarios.append(related)
         
-        # Render the scenario response
-        response = self.scenario_kb.render_scenario_response(
+        # Use template-based response generation
+        execution_data = {
+            "scenario": scenario,
+            "variables": variables,
+            "related_scenarios": related_scenarios,
+            "hackathon_context": plan.get("hackathon_context", {})
+        }
+        
+        response = await self._render_response_with_templates(
             scenario, 
-            variables, 
-            question=processed_query.get("cleaned_query")
+            execution_data, 
+            processed_query,
+            conversation_context
         )
         
-        # Add related scenario information
-        if related_scenarios:
+        # Add related scenario information if not already included
+        if related_scenarios and "Related topics" not in response:
             related_info = "\n\nRelated topics you might find helpful:\n"
             for related in related_scenarios:
                 related_info += f"- {related['title']}\n"
             response += related_info
-            
-        # Add phase-specific guidance if available
-        if "hackathon_context" in plan and plan["hackathon_context"].get("phase"):
-            phase = plan["hackathon_context"]["phase"]
-            if phase == "planning":
-                response += "\n\nSince you're in the planning phase, you might also want to look at setting up your hackathon page and configuring the basic settings."
-            elif phase == "setup":
-                response += "\n\nAs you're in the setup phase, remember to also configure your submission requirements and customize your hackathon page."
-            elif phase == "active":
-                response += "\n\nSince your hackathon is active, consider monitoring submissions and preparing for the judging phase."
-            elif phase == "judging":
-                response += "\n\nWith judging in progress, ensure all your judges have access and understand how to evaluate projects."
                 
         return {
             "success": True,
@@ -407,3 +405,113 @@ class PlanExecutor:
                 content["common_issues"] = components["common_issues"]
                 
         return content
+
+        def _render_response_with_templates(self, scenario: Dict[str, Any], 
+                                execution_data: Dict[str, Any],
+                                processed_query: Dict[str, Any],
+                                conversation_context: Dict[str, Any] = None) -> str:
+    """
+    Render a response using templates and enhanced generation.
+    
+    Args:
+        scenario: Scenario data
+        execution_data: Execution result data
+        processed_query: Processed query data
+        conversation_context: Conversation context
+        
+    Returns:
+        Rendered response
+    """
+    from src.response_templates import ResponseTemplateEngine
+    from src.response_validator import ResponseValidator
+    
+    # Initialize template engine and validator
+    template_engine = ResponseTemplateEngine()
+    validator = ResponseValidator()
+    
+    # Extract relevant data
+    scenario_id = scenario.get("scenario_id", "unknown")
+    intent = processed_query.get("intent", {}).get("type", "question")
+    
+    # Extract content from execution data
+    content = ""
+    if "retrieved_information" in execution_data:
+        info = execution_data["retrieved_information"]
+        if isinstance(info, dict):
+            # Try to extract content from structured data
+            if "scenarios" in info and info["scenarios"]:
+                top_scenario = info["scenarios"][0]
+                if "content" in top_scenario:
+                    if isinstance(top_scenario["content"], dict):
+                        if "steps" in top_scenario["content"]:
+                            steps = top_scenario["content"]["steps"]
+                            content += "\n".join([f"{i+1}. {step}" for i, step in enumerate(steps)])
+                        if "notes" in top_scenario["content"]:
+                            content += f"\n\n{top_scenario['content']['notes']}"
+                    else:
+                        content += str(top_scenario["content"])
+        else:
+            content = str(info)
+    
+    # If no content from execution data, use scenario components
+    if not content and "answer_components" in scenario:
+        components = scenario["answer_components"]
+        if "steps" in components and components["steps"]:
+            content += "\n".join([f"{i+1}. {step}" for i, step in enumerate(components["steps"])])
+        if "notes" in components and components["notes"]:
+            content += f"\n\n{components['notes']}"
+        if "common_issues" in components and components["common_issues"]:
+            content += f"\n\nCommon issues: {components['common_issues']}"
+    
+    # Prepare template data
+    template_data = {
+        "content": content,
+        "topic": scenario.get("title", "Devfolio"),
+        "hackathon_name": "your hackathon"
+    }
+    
+    # Add hackathon name from context if available
+    if conversation_context and "hackathon_state" in conversation_context:
+        if conversation_context["hackathon_state"].get("hackathon_name"):
+            template_data["hackathon_name"] = conversation_context["hackathon_state"]["hackathon_name"]
+    
+    # Try to render with template first
+    template_response = template_engine.render_full_response(scenario_id, template_data, intent)
+    
+    # If template rendering worked, use it
+    if template_response and len(template_response) > 50:
+        # Validate and improve the template response
+        is_valid, improved_response, issues = validator.validate_response(
+            template_response, processed_query, scenario
+        )
+        
+        if issues:
+            logger.info(f"Template response had issues: {issues}")
+            
+        if is_valid:
+            return improved_response
+    
+    # If template approach failed, use enhanced OpenAI generation
+    try:
+        logger.info("Using enhanced OpenAI generation for response")
+        enhanced_response = await self.openai_client.generate_enhanced_response(
+            processed_query,
+            scenario,
+            conversation_context,
+            execution_data
+        )
+        
+        # Validate and improve the enhanced response
+        is_valid, improved_response, issues = validator.validate_response(
+            enhanced_response, processed_query, scenario
+        )
+        
+        if issues:
+            logger.info(f"Enhanced response had issues: {issues}")
+            
+        return improved_response
+        
+    except Exception as e:
+        logger.error(f"Error generating enhanced response: {e}")
+        # Fall back to template response even if it had issues
+        return template_response
