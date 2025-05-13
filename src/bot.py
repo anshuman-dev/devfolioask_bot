@@ -11,9 +11,15 @@ from dotenv import load_dotenv
 from src.knowledge import KnowledgeBase
 from src.openai_client import OpenAIClient
 from src.feedback import FeedbackSystem
+from src.openai_eval_system import OpenAIEvalSystem
 from src.agentic_processor import AgenticProcessor
 from src.context_store import ContextStore
 from src.context_inference_engine import ContextInferenceEngine
+# Add to the imports section at the top of bot.py:
+import time
+from src.auto_eval_service import AutoEvalService
+
+# Add after the other service initializations:
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +30,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+auto_eval_service = AutoEvalService()
+logger.info("Auto-evaluation service initialized")
+
 # Get environment variables
 TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERNAMES = os.getenv("ALLOWED_USERNAMES", "").split(",")
@@ -33,6 +42,7 @@ knowledge_base = KnowledgeBase()
 openai_client = OpenAIClient()
 feedback_system = FeedbackSystem()
 agentic_processor = AgenticProcessor()
+openai_eval_system = OpenAIEvalSystem()
 
 # Initialize context management
 context_store = ContextStore()
@@ -41,6 +51,9 @@ context_inference_engine = ContextInferenceEngine()
 # Pending questions/mentions tracking
 pending_mentions = {}  # User mentioned bot but no question yet
 pending_questions = {}  # User asked question but no bot mention yet
+
+# Conversation states for feedback
+SELECTING_INTERACTION, SELECTING_FEEDBACK_TYPE, PROVIDING_FEEDBACK, CONFIRMING_FEEDBACK = range(4)
 
 # Log configuration on startup
 logger.info(f"Starting bot with token: {TOKEN[:5] if TOKEN else 'None'}...")
@@ -134,9 +147,11 @@ def get_greeting_response():
     import random
     return random.choice(greetings)
 
+# Update the process_question function in bot.py to add auto-evaluation
+
 async def process_question(question: str, user_id: str = None, chat_id: str = None, bot = None) -> tuple:
     """
-    Process a question using the agentic processor.
+    Process a question using the agentic processor and auto-evaluate the response.
     
     Args:
         question: The user's question
@@ -168,6 +183,10 @@ async def process_question(question: str, user_id: str = None, chat_id: str = No
                 interaction_id = feedback_system.store_interaction(user_id, question, answer)
             # Update conversation context
             update_user_context(user_id, question, answer)
+        
+        # Auto-evaluate every response
+        auto_eval_service.queue_evaluation(question, answer)
+        logger.info(f"Queued auto-evaluation for interaction: {interaction_id if interaction_id else 'unknown'}")
         
         return answer, interaction_id
         
@@ -256,7 +275,14 @@ async def give_feedback_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("The feedback command can only be used in private chats with me.")
         return
     
-    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    user_id = str(user.id)
+    username = user.username
+    
+    # Check if user is authorized for DM feedback
+    if not feedback_system.is_authorized_for_dm_feedback(username):
+        await update.message.reply_text("Sorry, you're not authorized to provide feedback via DM.")
+        return
     
     # Show typing indicator
     await context.bot.send_chat_action(
@@ -275,21 +301,199 @@ async def give_feedback_command(update: Update, context: ContextTypes.DEFAULT_TY
     feedback_system.start_feedback(user_id)
     
     # Build message with recent interactions
-    message = "Please select which interaction you'd like to provide feedback for by sending its number (1-5):\n\n"
+    message = "Please select which interaction you'd like to provide feedback for by tapping the number:\n\n"
     
+    # Create inline keyboard with buttons for each interaction
+    keyboard = []
     for i, interaction in enumerate(interactions[:5], 1):  # Limit to 5 most recent
-        # Truncate question/answer for display
+        # Truncate question for display
         q_short = interaction["question"][:50] + "..." if len(interaction["question"]) > 50 else interaction["question"]
-        a_short = interaction["answer"][:50] + "..." if len(interaction["answer"]) > 50 else interaction["answer"]
         
-        message += f"{i}. Q: {q_short}\nA: {a_short}\n\n"
+        message += f"{i}. Q: {q_short}\n\n"
+        keyboard.append([InlineKeyboardButton(f"{i}", callback_data=f"feedback_interaction_{i}")])
     
-    message += "To provide feedback, send the number (1-5) of the interaction you want to comment on."
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, reply_markup=reply_markup)
     
     # Store this interaction
     feedback_system.store_interaction(user_id, "/give_feedback", message)
+    
+    return SELECTING_INTERACTION
+
+async def feedback_interaction_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle interaction selection for feedback."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    
+    # Extract the selected interaction number
+    interaction_number = int(query.data.split("_")[-1])
+    
+    # Get the interactions and find the selected one
+    interactions = feedback_system.get_recent_interactions(user_id)
+    if interaction_number <= len(interactions):
+        selected_interaction = interactions[interaction_number-1]
+        interaction_id = selected_interaction["id"]
+        
+        # Update feedback state
+        feedback_system.pending_feedback[user_id] = {
+            "state": "awaiting_feedback_type",
+            "interaction_id": interaction_id
+        }
+        
+        # Show feedback type options
+        feedback_types = feedback_system.get_feedback_types()
+        keyboard = []
+        for i, feedback_type in enumerate(feedback_types, 1):
+            keyboard.append([InlineKeyboardButton(feedback_type, callback_data=f"feedback_type_{i}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Show the question and answer for reference
+        q_full = selected_interaction["question"]
+        a_full = selected_interaction["answer"]
+        
+        message = f"You selected:\n\nQuestion: {q_full}\n\nAnswer: {a_full}\n\nPlease select a feedback type:"
+        
+        # Edit the message to show feedback type options
+        await query.edit_message_text(message, reply_markup=reply_markup)
+        
+        return SELECTING_FEEDBACK_TYPE
+    else:
+        await query.edit_message_text("Invalid selection. Please try again.")
+        return ConversationHandler.END
+
+async def feedback_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle feedback type selection."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    
+    # Extract the selected feedback type
+    feedback_type_idx = int(query.data.split("_")[-1])
+    feedback_types = feedback_system.get_feedback_types()
+    feedback_type = feedback_types[feedback_type_idx-1]
+    
+    # Update feedback state
+    feedback_system.pending_feedback[user_id]["state"] = "awaiting_feedback_text"
+    feedback_system.pending_feedback[user_id]["feedback_type"] = feedback_type
+    
+    # Ask for detailed feedback
+    message = f"You selected '{feedback_type}'. Please type your detailed feedback about this response:"
+    
+    await query.edit_message_text(message)
+    
+    return PROVIDING_FEEDBACK
+
+async def feedback_text_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle receiving detailed feedback text."""
+    user_id = str(update.effective_user.id)
+    feedback_text = update.message.text
+    
+    # Update feedback state
+    feedback_system.pending_feedback[user_id]["state"] = "awaiting_confirmation"
+    feedback_system.pending_feedback[user_id]["feedback_text"] = feedback_text
+    
+    # Ask for confirmation
+    keyboard = [
+        [InlineKeyboardButton("Yes", callback_data="feedback_more_yes")],
+        [InlineKeyboardButton("No", callback_data="feedback_more_no")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text("Thank you for your feedback. Would you like to add more feedback?", reply_markup=reply_markup)
+    
+    return CONFIRMING_FEEDBACK
+
+async def feedback_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle feedback confirmation."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    add_more = query.data == "feedback_more_yes"
+    
+    if add_more:
+        # Ask for more feedback
+        feedback_system.pending_feedback[user_id]["state"] = "awaiting_feedback_text"
+        await query.edit_message_text("Please provide additional feedback:")
+        return PROVIDING_FEEDBACK
+    else:
+        # Save the feedback
+        interaction_id = feedback_system.pending_feedback[user_id]["interaction_id"]
+        feedback_type = feedback_system.pending_feedback[user_id]["feedback_type"]
+        feedback_text = feedback_system.pending_feedback[user_id]["feedback_text"]
+        
+        interaction = feedback_system.recent_interactions.get(interaction_id)
+        if not interaction:
+            # Clean up the pending state
+            if user_id in feedback_system.pending_feedback:
+                del feedback_system.pending_feedback[user_id]
+            await query.edit_message_text("Interaction not found. Feedback process canceled.")
+            return ConversationHandler.END
+        
+        # Save the feedback
+        feedback_saved = feedback_system.save_structured_feedback(
+            interaction["question"],
+            interaction["answer"],
+            feedback_type,
+            feedback_text,
+            user_id
+        )
+        
+        # Clean up the pending state
+        if user_id in feedback_system.pending_feedback:
+            del feedback_system.pending_feedback[user_id]
+        
+        if feedback_saved:
+            await query.edit_message_text("Thank you for your feedback! It will help improve the bot.")
+            
+            # Trigger OpenAI eval for this feedback
+            try:
+                # Only run eval for certain feedback types
+                if feedback_type in ["Not Helpful", "Incorrect", "Confusing"]:
+                    # Create eval data
+                    eval_data = [{
+                        "question": interaction["question"],
+                        "answer": interaction["answer"],
+                        "correct_answer": "",  # We don't have a ground truth here
+                        "feedback": feedback_text,
+                        "feedback_type": feedback_type
+                    }]
+                    
+                    # Schedule async eval (don't await to avoid blocking)
+                    context.application.create_task(
+                        run_openai_eval(eval_data, interaction["question"], interaction["answer"])
+                    )
+            except Exception as e:
+                logger.error(f"Error scheduling OpenAI eval: {e}")
+            
+        else:
+            await query.edit_message_text("Failed to save feedback. Please try again later.")
+        
+        return ConversationHandler.END
+
+async def run_openai_eval(eval_data, question, answer):
+    """Run OpenAI eval for a feedback item asynchronously."""
+    try:
+        logger.info(f"Running OpenAI eval for question: {question[:30]}...")
+        
+        # Run helpfulness eval
+        result = await asyncio.to_thread(
+            openai_eval_system.evaluate_responses,
+            [{"question": question, "answer": answer, "correct_answer": ""}],
+            "helpfulness_eval",
+            "gpt-4"
+        )
+        
+        # Log results
+        logger.info(f"OpenAI eval results: {result.get('status')} - Pass rate: {result.get('pass_rate', 0)}%")
+        
+    except Exception as e:
+        logger.error(f"Error running OpenAI eval: {e}")
 
 async def save_contexts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command to manually save all contexts."""
@@ -305,6 +509,96 @@ async def save_contexts_command(update: Update, context: ContextTypes.DEFAULT_TY
     context_store.save_all_dirty()
     
     await update.message.reply_text("All user contexts have been saved.")
+
+async def run_eval_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to run an evaluation of recent responses."""
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    # Check if user is an admin
+    if user_id not in os.getenv("ADMIN_IDS", "").split(","):
+        await update.message.reply_text("Sorry, only admins can use this command.")
+        return
+    
+    # Show typing indicator
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action=ChatAction.TYPING
+    )
+    
+    try:
+        # Get recent interactions for evaluation
+        all_interactions = []
+        for int_id, data in feedback_system.recent_interactions.items():
+            all_interactions.append({
+                "id": int_id,
+                "question": data["question"],
+                "answer": data["answer"],
+                "timestamp": data["timestamp"],
+                "user_id": data["user_id"]
+            })
+        
+        # Sort by timestamp (newest first) and take the most recent 10
+        all_interactions.sort(key=lambda x: x["timestamp"], reverse=True)
+        recent_interactions = all_interactions[:10]
+        
+        if not recent_interactions:
+            await update.message.reply_text("No recent interactions found for evaluation.")
+            return
+        
+        # Prepare eval data
+        eval_data = []
+        for interaction in recent_interactions:
+            eval_data.append({
+                "question": interaction["question"],
+                "answer": interaction["answer"],
+                "correct_answer": ""  # We don't have ground truth here
+            })
+        
+        await update.message.reply_text("Evaluation started. This may take a few minutes...")
+        
+        # Run helpfulness eval asynchronously
+        result = await asyncio.to_thread(
+            openai_eval_system.evaluate_responses,
+            eval_data,
+            "helpfulness_eval",
+            "gpt-4"
+        )
+        
+        # Format and send results
+        if result.get("status") == "completed":
+            summary = f"Evaluation Results (Helpfulness):\n\n"
+            summary += f"Total Items: {result.get('total_items', 0)}\n"
+            summary += f"Passed: {result.get('passed_items', 0)}\n"
+            summary += f"Failed: {result.get('failed_items', 0)}\n"
+            summary += f"Pass Rate: {result.get('pass_rate', 0):.1f}%\n\n"
+            
+            # Include detailed results
+            if "items" in result:
+                summary += "Detailed Results:\n\n"
+                for i, item in enumerate(result["items"][:5], 1):  # Show first 5 items
+                    summary += f"{i}. Q: {item.get('question', '')[:50]}...\n"
+                    summary += f"   Status: {item.get('status', 'unknown')}\n\n"
+            
+            await update.message.reply_text(summary)
+        else:
+            await update.message.reply_text(f"Evaluation failed: {result.get('error', 'Unknown error')}")
+        
+    except Exception as e:
+        logger.error(f"Error running evaluation: {e}")
+        await update.message.reply_text(f"Error running evaluation: {str(e)}")
+
+async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the feedback conversation."""
+    user_id = str(update.effective_user.id)
+    
+    # Clean up pending feedback state
+    if user_id in feedback_system.pending_feedback:
+        del feedback_system.pending_feedback[user_id]
+    
+    await update.message.reply_text("Feedback process canceled.")
+    
+    return ConversationHandler.END
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages."""
@@ -325,8 +619,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         result = feedback_system.process_feedback_message(user_id, text)
         
         if result["status"] == "success":
-            if result["next_step"] == "provide_feedback":
+            if result["next_step"] == "select_feedback_type":
+                # Create inline keyboard for feedback types
+                keyboard = []
+                for i, option in enumerate(result["options"], 1):
+                    keyboard.append([InlineKeyboardButton(option, callback_data=f"feedback_type_{i}")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await message.reply_text(result["message"], reply_markup=reply_markup)
+                
+            elif result["next_step"] == "provide_feedback_text":
                 await message.reply_text(result["message"])
+                
+            elif result["next_step"] == "confirm_feedback":
+                # Create inline keyboard for confirmation
+                keyboard = [
+                    [InlineKeyboardButton("Yes", callback_data="feedback_more_yes")],
+                    [InlineKeyboardButton("No", callback_data="feedback_more_no")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await message.reply_text(result["message"], reply_markup=reply_markup)
+                
             elif result["next_step"] == "complete":
                 await message.reply_text(result["message"])
         else:
@@ -624,8 +937,31 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("ask", ask_command))
-    application.add_handler(CommandHandler("give_feedback", give_feedback_command))
     application.add_handler(CommandHandler("save_contexts", save_contexts_command))
+    application.add_handler(CommandHandler("run_eval", run_eval_command))
+    
+    # Add conversation handler for feedback
+    feedback_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("give_feedback", give_feedback_command)],
+        states={
+            SELECTING_INTERACTION: [
+                CallbackQueryHandler(feedback_interaction_selected, pattern=r"^feedback_interaction_\d+$"),
+            ],
+            SELECTING_FEEDBACK_TYPE: [
+                CallbackQueryHandler(feedback_type_selected, pattern=r"^feedback_type_\d+$"),
+            ],
+            PROVIDING_FEEDBACK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, feedback_text_received),
+            ],
+            CONFIRMING_FEEDBACK: [
+                CallbackQueryHandler(feedback_confirmation, pattern=r"^feedback_more_(yes|no)$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_feedback)],
+    )
+    application.add_handler(feedback_conv_handler)
+
+    # Regular message handler (must come after conversation handlers)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
 
