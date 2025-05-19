@@ -1,135 +1,135 @@
-import numpy as np
 import logging
-from typing import List, Dict, Any, Tuple
+import numpy as np
+from typing import List, Dict, Any, Tuple, Optional
 from sentence_transformers import SentenceTransformer
+
+# Fix the import - use hf_hub_download instead of cached_download
+#from huggingface_hub import HfApi, HfFolder, Repository, hf_hub_url, hf_hub_download as cached_download
+from huggingface_hub import HfApi, HfFolder, Repository, hf_hub_url
+from huggingface_shim import cached_download
 
 logger = logging.getLogger(__name__)
 
 class SemanticMatcher:
     """
-    Uses sentence embeddings to match queries to scenarios semantically.
-    This enables more natural language understanding beyond keyword matching.
+    Uses sentence transformers to match queries to relevant scenarios 
+    based on semantic similarity.
     """
     
-    def __init__(self, scenarios_data: List[Dict[str, Any]]):
+    def __init__(self, scenarios: List[Dict[str, Any]], 
+                model_name: str = "all-MiniLM-L6-v2"):
         """
-        Initialize the semantic matcher with scenario data.
+        Initialize the semantic matcher with scenarios and model.
         
         Args:
-            scenarios_data: List of scenario dictionaries
+            scenarios: List of scenario dictionaries with canonical questions
+            model_name: Name of the sentence transformer model to use
         """
-        logger.info("Initializing SemanticMatcher with sentence-transformers...")
-        try:
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Loaded sentence-transformer model successfully")
-        except Exception as e:
-            logger.error(f"Error loading sentence-transformer model: {e}")
-            logger.warning("Falling back to simpler matching methods")
-            self.model = None
-            
-        self.scenarios = scenarios_data
-        self.scenario_embeddings = None
+        logger.info(f"Initializing SemanticMatcher with sentence-transformers...")
+        self.model = SentenceTransformer(model_name)
+        self.scenarios = scenarios
+        
+        # Extract canonical questions from scenarios
         self.canonical_questions = []
-        self.scenario_mapping = {}  # Maps embedding index to scenario
+        self.scenario_map = {}
         
-        if self.model:
-            self.scenario_embeddings = self._compute_embeddings()
-    
-    def _compute_embeddings(self) -> np.ndarray:
-        """
-        Compute embeddings for all canonical questions in the scenarios.
-        
-        Returns:
-            Numpy array of embeddings
-        """
-        all_questions = []
-        self.canonical_questions = []
-        self.scenario_mapping = {}
-        
-        # Collect all canonical questions from scenarios
-        embedding_idx = 0
-        for scenario_idx, scenario in enumerate(self.scenarios):
+        for scenario in scenarios:
             if "canonical_questions" in scenario:
                 for question in scenario["canonical_questions"]:
-                    all_questions.append(question)
                     self.canonical_questions.append(question)
-                    self.scenario_mapping[embedding_idx] = scenario_idx
-                    embedding_idx += 1
-            
-            # Also encode the title as a potential match point
-            all_questions.append(scenario["title"])
-            self.canonical_questions.append(scenario["title"])
-            self.scenario_mapping[embedding_idx] = scenario_idx
-            embedding_idx += 1
+                    self.scenario_map[question] = scenario
         
-        # Compute embeddings
-        if not all_questions:
+        logger.info(f"Computing embeddings for {len(self.canonical_questions)} canonical questions")
+        # Compute embeddings for canonical questions
+        if self.canonical_questions:
+            self.question_embeddings = self.model.encode(
+                self.canonical_questions, 
+                show_progress_bar=True,
+                convert_to_tensor=True
+            )
+        else:
             logger.warning("No canonical questions found in scenarios")
-            return np.array([])
+            # Initialize with empty tensor
+            self.question_embeddings = np.array([])
             
-        try:
-            logger.info(f"Computing embeddings for {len(all_questions)} canonical questions")
-            return self.model.encode(all_questions, convert_to_numpy=True)
-        except Exception as e:
-            logger.error(f"Error computing embeddings: {e}")
-            return np.array([])
+        logger.info("Loaded sentence-transformer model successfully")
     
-    def find_matching_scenarios(self, query: str, top_k: int = 3) -> List[Tuple[Dict[str, Any], float]]:
+    def find_matching_scenarios(self, query: str, top_k: int = 3, 
+                              threshold: float = 0.5) -> List[Tuple[Dict[str, Any], float]]:
         """
-        Find scenarios matching the query using semantic similarity.
+        Find matching scenarios for a query based on semantic similarity.
         
         Args:
-            query: User's query
-            top_k: Number of top matches to return
+            query: User's query text
+            top_k: Number of top matching scenarios to return
+            threshold: Minimum similarity score to include a scenario
             
         Returns:
             List of tuples containing (scenario, similarity_score)
         """
-        if not self.model or len(self.scenario_embeddings) == 0:
-            logger.warning("Semantic matching unavailable, returning empty results")
+        if not self.canonical_questions:
+            logger.warning("No canonical questions available for matching")
             return []
             
-        try:
-            # Compute query embedding
-            query_embedding = self.model.encode(query, convert_to_numpy=True)
+        # Encode the query
+        query_embedding = self.model.encode(query, convert_to_tensor=True)
+        
+        # Compute cosine similarities
+        similarities = []
+        for i, question in enumerate(self.canonical_questions):
+            # Get embedding for the canonical question
+            question_embedding = self.question_embeddings[i]
             
-            # Calculate cosine similarity
-            similarities = np.dot(self.scenario_embeddings, query_embedding) / (
-                np.linalg.norm(self.scenario_embeddings, axis=1) * np.linalg.norm(query_embedding)
-            )
-            
-            # Get top-k matches
-            top_indices = np.argsort(-similarities)[:top_k*2]  # Get more to filter duplicates
-            
-            # Collect unique scenarios with their highest similarity score
-            seen_scenarios = set()
-            results = []
-            
-            for idx in top_indices:
-                scenario_idx = self.scenario_mapping[idx]
-                similarity = similarities[idx]
+            # Compute cosine similarity
+            similarity = self._cosine_similarity(query_embedding, question_embedding)
+            similarities.append((question, similarity))
+        
+        # Sort by similarity score (descending)
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        
+        # Get top-k matches above threshold
+        top_matches = []
+        seen_scenarios = set()
+        
+        for question, score in similarities[:top_k * 2]:  # Get more to filter duplicates
+            if score < threshold:
+                continue
                 
-                if scenario_idx not in seen_scenarios and similarity > 0.5:  # Threshold for meaningful similarity
-                    seen_scenarios.add(scenario_idx)
-                    results.append((self.scenarios[scenario_idx], float(similarity)))
-                    
-                    if len(results) >= top_k:
-                        break
+            scenario = self.scenario_map[question]
+            scenario_id = scenario.get("scenario_id")
             
-            logger.info(f"Semantic matcher found {len(results)} relevant scenarios")
-            return results
+            # Skip duplicates
+            if scenario_id in seen_scenarios:
+                continue
+                
+            seen_scenarios.add(scenario_id)
+            top_matches.append((scenario, score))
             
-        except Exception as e:
-            logger.error(f"Error in semantic matching: {e}")
-            return []
+            if len(top_matches) >= top_k:
+                break
+                
+        return top_matches
     
-    def update_scenarios(self, new_scenarios: List[Dict[str, Any]]) -> None:
+    def _cosine_similarity(self, a, b):
         """
-        Update the scenarios data and recompute embeddings.
+        Compute cosine similarity between two vectors.
         
         Args:
-            new_scenarios: New list of scenario dictionaries
+            a: First vector
+            b: Second vector
+            
+        Returns:
+            Cosine similarity score
         """
-        self.scenarios = new_scenarios
-        if self.model:
-            self.scenario_embeddings = self._compute_embeddings()
+        # Convert to numpy arrays if they're not already
+        if hasattr(a, 'cpu') and callable(a.cpu):
+            a = a.cpu().numpy()
+        if hasattr(b, 'cpu') and callable(b.cpu):
+            b = b.cpu().numpy()
+            
+        # Ensure we have numpy arrays
+        a = np.array(a)
+        b = np.array(b)
+        
+        # Compute cosine similarity
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))

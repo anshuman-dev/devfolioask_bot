@@ -27,6 +27,15 @@ class ContextInferenceEngine:
         # Create a working copy to avoid modifying the original during processing
         updated_context = current_context.copy()
         
+        # If context is empty or not properly initialized, initialize it
+        if not updated_context or not isinstance(updated_context, dict):
+            updated_context = self._create_default_context()
+        
+        # Ensure critical sections exist
+        for section in ["identity", "hackathon_state", "preferences", "conversation", "feedback"]:
+            if section not in updated_context:
+                updated_context[section] = {}
+        
         # Update basic conversation tracking
         self._update_conversation_tracking(updated_context, query, response)
         
@@ -40,10 +49,43 @@ class ContextInferenceEngine:
         self._detect_feedback(updated_context, query)
         
         # Track support contact suggestions
-        if "@singhanshuman8" in response or "@AniketRaj314" in response:
+        if "feedback" in updated_context and "@singhanshuman8" in response or "@AniketRaj314" in response:
             updated_context["feedback"]["support_contact_suggested"] = True
             
         return updated_context
+    
+    def _create_default_context(self) -> Dict[str, Any]:
+        """Create a default context structure."""
+        now = time.time()
+        
+        return {
+            "identity": {
+                "user_id": None,
+                "first_interaction": now,
+                "username": None
+            },
+            "hackathon_state": {
+                "current_phase": None,  # planning, setup, active, judging
+                "hackathon_name": None,
+                "has_enabled_judging": False
+            },
+            "preferences": {
+                "judging_mode_preference": None,
+                "previous_concerns": []
+            },
+            "conversation": {
+                "recent_questions": [],
+                "recent_answers": [],
+                "interaction_count": 0,
+                "last_interaction_time": now,
+                "last_scenario_discussed": None
+            },
+            "feedback": {
+                "positive_feedback_count": 0,
+                "negative_feedback_count": 0,
+                "support_contact_suggested": False
+            }
+        }
         
     def _update_conversation_tracking(self, context: Dict[str, Any], 
                                     query: str, response: str) -> None:
@@ -54,6 +96,8 @@ class ContextInferenceEngine:
         context["conversation"]["last_interaction_time"] = now
         
         # Update interaction count
+        if "interaction_count" not in context["conversation"]:
+            context["conversation"]["interaction_count"] = 0
         context["conversation"]["interaction_count"] += 1
         
         # Add to recent questions/answers (limited to last 10)

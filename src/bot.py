@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from src.knowledge import KnowledgeBase
 from src.openai_client import OpenAIClient
 from src.feedback import FeedbackSystem
-from src.openai_eval_system import OpenAIEvalSystem
+from src.open_ai_eval import OpenAIEvalSystem
 from src.agentic_processor import AgenticProcessor
 from src.context_store import ContextStore
 from src.context_inference_engine import ContextInferenceEngine

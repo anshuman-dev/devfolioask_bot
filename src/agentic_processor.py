@@ -19,24 +19,23 @@ class AgenticProcessor:
     
     def __init__(self):
         # In __init__ method
-def __init__(self):
-    """Initialize the agentic processor with necessary components."""
-    self.knowledge_base = KnowledgeBase()
-    self.scenario_kb = ScenarioKnowledgeBase()
-    self.openai_client = OpenAIClient()
-    
-    # Initialize semantic matching components
-    self.semantic_matcher = SemanticMatcher(self.scenario_kb.scenarios)
-    self.query_processor = QueryProcessor(self.semantic_matcher)
-    
-    # Initialize the agent
-    self.agent = DevfolioAgent(
-        knowledge_base=self.knowledge_base,
-        scenario_kb=self.scenario_kb,
-        openai_client=self.openai_client,
-        semantic_matcher=self.semantic_matcher,
-        query_processor=self.query_processor
-    )
+        """Initialize the agentic processor with necessary components."""
+        self.knowledge_base = KnowledgeBase()
+        self.scenario_kb = ScenarioKnowledgeBase()
+        self.openai_client = OpenAIClient()
+        
+        # Initialize semantic matching components
+        self.semantic_matcher = SemanticMatcher(self.scenario_kb.scenarios)
+        self.query_processor = QueryProcessor(self.semantic_matcher)
+        
+        # Initialize the agent
+        self.agent = DevfolioAgent(
+            knowledge_base=self.knowledge_base,
+            scenario_kb=self.scenario_kb,
+            openai_client=self.openai_client,
+            semantic_matcher=self.semantic_matcher,
+            query_processor=self.query_processor
+        )
 
 # Then replace process_question with this
     async def process_question(self, question: str, user_id: str = None, 

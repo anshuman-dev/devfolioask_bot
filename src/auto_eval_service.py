@@ -1,8 +1,10 @@
 import asyncio
 import os
 import logging
+import time
+import traceback
 from typing import Dict, List, Any, Optional
-from src.openai_eval_system import OpenAIEvalSystem
+from src.enhanced_openai_eval_system import EnhancedOpenAIEvalSystem
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +16,26 @@ class AutoEvalService:
     
     def __init__(self):
         """Initialize the auto-evaluation service."""
-        self.eval_system = OpenAIEvalSystem()
-        self.pending_evals = []  # Queue for background processing
-        self.is_processing = False
-        self.eval_types = ["helpfulness_eval", "clarity_eval"]  # Types of evals to run
+        try:
+            # Log OpenAI API key status (without revealing the key)
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                logger.error("⚠️ OPENAI_API_KEY not found in environment variables! Auto-evaluation will not work.")
+            else:
+                logger.info(f"OPENAI_API_KEY found in environment variables (starts with: {api_key[:3]}***)")
+            
+            self.eval_system = EnhancedOpenAIEvalSystem()
+            self.pending_evals = []  # Queue for background processing
+            self.is_processing = False
+            
+            # FIX: Don't start periodic processing in __init__
+            # We'll start it manually when needed
+            logger.info("AutoEvalService initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing AutoEvalService: {e}")
+            logger.error(traceback.format_exc())
+            # Don't re-raise to avoid breaking the bot if eval doesn't work
         
     def queue_evaluation(self, question: str, answer: str) -> None:
         """
@@ -29,76 +47,61 @@ class AutoEvalService:
         """
         logger.info(f"Queuing auto-evaluation for question: {question[:30]}...")
         
-        # Create evaluation data
-        eval_data = {
-            "question": question,
-            "answer": answer,
-            "correct_answer": "",  # We don't have a ground truth answer
-            "timestamp": int(time.time())
-        }
-        
-        # Add to queue
-        self.pending_evals.append(eval_data)
-        
-        # Start background processing if not already running
-        if not self.is_processing:
-            asyncio.create_task(self._process_evaluation_queue())
-    
-    async def _process_evaluation_queue(self) -> None:
-        """Process the queue of pending evaluations in the background."""
-        if self.is_processing:
-            return
-            
-        self.is_processing = True
-        
         try:
-            while self.pending_evals:
-                # Get a batch of up to 5 evaluations to process
-                batch = self.pending_evals[:5]
-                self.pending_evals = self.pending_evals[5:]
+            # Skip evaluations for error messages
+            if "I encountered an error" in answer or "I'm sorry" in answer and "try again" in answer:
+                logger.info("Skipping evaluation for error response")
+                return
                 
-                logger.info(f"Processing batch of {len(batch)} evaluations")
+            # Skip very short responses
+            if len(answer.strip()) < 20:
+                logger.info("Skipping evaluation for very short response")
+                return
                 
-                # Process the batch
-                await self._evaluate_batch(batch)
-                
-                # Small delay to avoid overwhelming the API
-                await asyncio.sleep(1)
+            # Create evaluation data
+            eval_data = {
+                "question": question,
+                "answer": answer,
+                "timestamp": int(time.time())
+            }
+            
+            # Add to queue
+            self.pending_evals.append(eval_data)
+            logger.info(f"Added to evaluation queue. Current queue size: {len(self.pending_evals)}")
+            
+            # Start background processing if not already running
+            if not self.is_processing:
+                # FIX: Instead of creating a task, just process in-place
+                self._process_evaluation_sync(eval_data)
                 
         except Exception as e:
-            logger.error(f"Error processing evaluation queue: {e}")
-        finally:
-            self.is_processing = False
-            
-            # If there are still items in the queue, start processing again
-            if self.pending_evals:
-                asyncio.create_task(self._process_evaluation_queue())
+            logger.error(f"Error queuing evaluation: {e}")
+            logger.error(traceback.format_exc())
     
-    async def _evaluate_batch(self, batch: List[Dict[str, Any]]) -> None:
+    def _process_evaluation_sync(self, eval_data: Dict[str, Any]) -> None:
         """
-        Evaluate a batch of question-answer pairs.
+        Process a single evaluation synchronously without asyncio.
         
         Args:
-            batch: List of evaluation data dicts
+            eval_data: The evaluation data to process
         """
         try:
-            # Process each item individually using the optimized method
-            for item in batch:
-                for eval_type in self.eval_types:
-                    result = await asyncio.to_thread(
-                        self.eval_system.evaluate_single_response,
-                        item["question"],
-                        item["answer"],
-                        eval_type
-                    )
-                    
-                    if result.get("status") != "success":
-                        logger.warning(f"Evaluation failed: {result.get('error', 'Unknown error')}")
-                    
-            logger.info(f"Successfully evaluated batch of {len(batch)} interactions")
+            logger.info(f"Processing evaluation for question: {eval_data['question'][:30]}...")
+            
+            # Use the enhanced eval system
+            result = self.eval_system.evaluate_with_feedback(
+                eval_data["question"],
+                eval_data["answer"]
+            )
+            
+            if result.get("status") == "success":
+                logger.info(f"Evaluation with feedback initiated: {result.get('run_id')}")
+            else:
+                logger.warning(f"Evaluation failed: {result.get('error', 'Unknown error')}")
                 
         except Exception as e:
-            logger.error(f"Error evaluating batch: {e}")
+            logger.error(f"Error evaluating: {e}")
+            logger.error(traceback.format_exc())
     
     def evaluate_single(self, question: str, answer: str) -> None:
         """

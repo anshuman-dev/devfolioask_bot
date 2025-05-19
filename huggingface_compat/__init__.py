@@ -1,0 +1,1 @@
+# Huggingface Hub compatibility layer
